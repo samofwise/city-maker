@@ -1,0 +1,56 @@
+name: Deploy to S3
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-southeast-2
+  S3_BUCKET: projects.samhenry.tech
+  S3_FOLDER: ${{ github.event.repository.name }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: false  # Workflow disabled
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::904581404707:role/deploy-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create S3 folder if it doesn't exist
+        run: |
+          aws s3api put-object --bucket ${{ env.S3_BUCKET }} --key ${{ env.S3_FOLDER }}/ || true
+
+      - name: Upload to S3
+        run: |
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET }}/${{ env.S3_FOLDER }}/ --delete --region ${{ env.AWS_REGION }}
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.SAMHENRY_TECH_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
