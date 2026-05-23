@@ -5,68 +5,113 @@ import {
   type Mesh,
   type VertexId,
 } from "../../lib/mesh";
+import {
+  PALETTE,
+  DEFAULT_CELL_DATA,
+  DEFAULT_EDGE_DATA,
+  DEFAULT_VERTEX_DATA,
+  type CellData,
+  type EdgeData,
+  type VertexData,
+} from "../../lib/terrain";
 
-const WIDTH = 800;
-const HEIGHT = 600;
-const SITE_COUNT = 24;
+export const WIDTH  = 800;
+export const HEIGHT = 600;
+const SITE_COUNT    = 32;
 const BOUNDS: [number, number, number, number] = [0, 0, WIDTH, HEIGHT];
 
-const createInitialMesh = (): Mesh => {
-  const rng = mulberry32(1337);
-  const sites = Array.from({ length: SITE_COUNT }, () => ({
-    x: rng() * WIDTH,
-    y: rng() * HEIGHT,
-  }));
-  return meshFromPoints(sites, BOUNDS, {
-    vertex: {},
-    edge: {},
-    cell: {},
-  });
-};
+type CityMesh = Mesh<VertexData, EdgeData, CellData>;
 
+// Deterministic PRNG so the mesh is stable across HMR reloads
 function mulberry32(seed: number) {
   let t = seed;
   return () => {
-    t |= 0;
-    t = (t + 0x6d2b79f5) | 0;
+    t |= 0; t = (t + 0x6d2b79f5) | 0;
     let r = Math.imul(t ^ (t >>> 15), 1 | t);
     r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
 }
 
+const createInitialMesh = (): CityMesh => {
+  const rng = mulberry32(1337);
+  // Spiral-ish spread so cells near center are denser (like TownGeneratorOS)
+  const sites = Array.from({ length: SITE_COUNT }, (_, i) => {
+    const a  = rng() * Math.PI * 2;
+    const r  = i === 0 ? 0 : 60 + rng() * (WIDTH / 2 - 80);
+    return {
+      x: Math.max(20, Math.min(WIDTH  - 20, WIDTH  / 2 + Math.cos(a) * r)),
+      y: Math.max(20, Math.min(HEIGHT - 20, HEIGHT / 2 + Math.sin(a) * r)),
+    };
+  });
+  return meshFromPoints(sites, BOUNDS, {
+    vertex: { ...DEFAULT_VERTEX_DATA },
+    edge:   { ...DEFAULT_EDGE_DATA },
+    cell:   { ...DEFAULT_CELL_DATA },
+  });
+};
+
+// Map each terrain type to fill + stroke colours
+const TERRAIN_STYLE: Record<
+  CellData["terrain"],
+  { fill: string; stroke: string }
+> = {
+  water:  { fill: PALETTE.water,      stroke: PALETTE.waterDark },
+  farm:   { fill: PALETTE.farm,       stroke: PALETTE.farmDark  },
+  forest: { fill: PALETTE.forest,     stroke: PALETTE.forestDark},
+  city:   { fill: PALETTE.city,       stroke: PALETTE.cityDark  },
+  market: { fill: PALETTE.market,     stroke: PALETTE.marketDark},
+  park:   { fill: PALETTE.park,       stroke: PALETTE.parkDark  },
+  empty:  { fill: PALETTE.empty,      stroke: PALETTE.paperDark },
+};
+
+// Edge feature colours
+const EDGE_STYLE: Record<
+  EdgeData["feature"],
+  { stroke: string; width: number } | null
+> = {
+  none:  null,
+  road:  { stroke: PALETTE.roadOuter,  width: 3.5 },
+  river: { stroke: PALETTE.riverFill,  width: 5   },
+  wall:  { stroke: PALETTE.wallStroke, width: 4   },
+};
+
+// Vertex feature shapes
+const VERTEX_RADIUS: Record<VertexData["feature"], number> = {
+  none:   5,
+  gate:   7,
+  bridge: 6,
+  tower:  8,
+};
+
+const VERTEX_FILL: Record<VertexData["feature"], string> = {
+  none:   PALETTE.text,
+  gate:   PALETTE.gate,
+  bridge: PALETTE.bridge,
+  tower:  PALETTE.tower,
+};
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export const MeshView = () => {
-  const [mesh, setMesh] = useState<Mesh>(createInitialMesh);
+  const [mesh, setMesh]       = useState<CityMesh>(createInitialMesh);
   const [dragging, setDragging] = useState<VertexId | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  const cellColors = useMemo(() => {
-    const colors = new Map<string, string>();
-    const rng = mulberry32(42);
-    for (const c of mesh.cells.values()) {
-      const hue = Math.floor(rng() * 360);
-      colors.set(c.id, `hsl(${hue}, 70%, 88%)`);
-    }
-    return colors;
-  }, [mesh]);
-
-  const toSvgPoint = (e: PointerEvent<SVGElement>): { x: number; y: number } => {
+  const toSvgPoint = (e: PointerEvent<SVGElement>) => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * WIDTH;
-    const y = ((e.clientY - rect.top) / rect.height) * HEIGHT;
     return {
-      x: Math.max(0, Math.min(WIDTH, x)),
-      y: Math.max(0, Math.min(HEIGHT, y)),
+      x: Math.max(0, Math.min(WIDTH,  ((e.clientX - rect.left) / rect.width)  * WIDTH)),
+      y: Math.max(0, Math.min(HEIGHT, ((e.clientY - rect.top)  / rect.height) * HEIGHT)),
     };
   };
 
-  const onPointerDown =
-    (id: VertexId) => (e: PointerEvent<SVGCircleElement>) => {
-      e.currentTarget.setPointerCapture(e.pointerId);
-      setDragging(id);
-    };
+  const onPointerDown = (id: VertexId) => (e: PointerEvent<SVGCircleElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragging(id);
+  };
 
   const onPointerMove = (e: PointerEvent<SVGSVGElement>) => {
     if (!dragging) return;
@@ -75,60 +120,95 @@ export const MeshView = () => {
     setMesh({ ...mesh });
   };
 
-  const onPointerUp = (e: PointerEvent<SVGSVGElement>) => {
-    if (dragging) {
-      (e.target as Element).releasePointerCapture?.(e.pointerId);
-      setDragging(null);
-    }
-  };
+  const onPointerUp = () => setDragging(null);
 
   const v = (id: VertexId) => mesh.vertices.get(id)!;
 
+  // Pre-compute points string per cell (memoised; rebuilds only when mesh changes)
+  const cellPoints = useMemo(
+    () =>
+      new Map(
+        [...mesh.cells.values()].map((c) => [
+          c.id,
+          c.vertexIds.map((id) => `${v(id).x},${v(id).y}`).join(" "),
+        ])
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mesh]
+  );
+
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="w-full max-w-4xl touch-none rounded border border-gray-200 bg-white"
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-    >
-      {[...mesh.cells.values()].map((c) => (
-        <polygon
-          key={c.id}
-          points={c.vertexIds.map((id) => `${v(id).x},${v(id).y}`).join(" ")}
-          fill={cellColors.get(c.id)}
-          stroke="none"
-        />
-      ))}
-      {[...mesh.edges.values()].map((e) => {
-        const a = v(e.a);
-        const b = v(e.b);
-        return (
-          <line
-            key={e.id}
-            x1={a.x}
-            y1={a.y}
-            x2={b.x}
-            y2={b.y}
-            stroke="#475569"
+    <div className="flex flex-col items-center gap-2">
+      {/* Legend */}
+      <div className="flex flex-wrap justify-center gap-3 text-xs text-gray-600">
+        {(Object.entries(TERRAIN_STYLE) as [CellData["terrain"], { fill: string }][]).map(
+          ([t, s]) => (
+            <span key={t} className="flex items-center gap-1 capitalize">
+              <span
+                className="inline-block h-3 w-3 rounded-sm border border-gray-400"
+                style={{ background: s.fill }}
+              />
+              {t}
+            </span>
+          )
+        )}
+      </div>
+
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        className="w-full max-w-4xl touch-none rounded border border-gray-300"
+        style={{ background: PALETTE.paper }}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        {/* Cell fills */}
+        {[...mesh.cells.values()].map((c) => {
+          const style = TERRAIN_STYLE[c.data.terrain];
+          return (
+            <polygon
+              key={c.id}
+              points={cellPoints.get(c.id)}
+              fill={style.fill}
+              stroke={style.stroke}
+              strokeWidth={0.8}
+            />
+          );
+        })}
+
+        {/* Edge features */}
+        {[...mesh.edges.values()].map((e) => {
+          const style = EDGE_STYLE[e.data.feature];
+          if (!style) return null;
+          const va = v(e.a), vb = v(e.b);
+          return (
+            <line
+              key={e.id}
+              x1={va.x} y1={va.y}
+              x2={vb.x} y2={vb.y}
+              stroke={style.stroke}
+              strokeWidth={style.width}
+              strokeLinecap="round"
+            />
+          );
+        })}
+
+        {/* Vertices */}
+        {[...mesh.vertices.values()].map((vx) => (
+          <circle
+            key={vx.id}
+            cx={vx.x}
+            cy={vx.y}
+            r={VERTEX_RADIUS[vx.data.feature]}
+            fill={dragging === vx.id ? "#dc2626" : VERTEX_FILL[vx.data.feature]}
+            stroke="white"
             strokeWidth={1.5}
+            className="cursor-grab active:cursor-grabbing"
+            onPointerDown={onPointerDown(vx.id)}
           />
-        );
-      })}
-      {[...mesh.vertices.values()].map((vx) => (
-        <circle
-          key={vx.id}
-          cx={vx.x}
-          cy={vx.y}
-          r={7}
-          fill={dragging === vx.id ? "#dc2626" : "#1f2937"}
-          stroke="white"
-          strokeWidth={2}
-          className="cursor-grab active:cursor-grabbing"
-          onPointerDown={onPointerDown(vx.id)}
-        />
-      ))}
-    </svg>
+        ))}
+      </svg>
+    </div>
   );
 };
