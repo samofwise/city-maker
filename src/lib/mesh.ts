@@ -1,4 +1,6 @@
 import { Delaunay } from "d3-delaunay";
+import { insetPolygon, type Pt } from "./geometry";
+import { CLEARANCE, type EdgeData } from "./terrain";
 
 // ── Branded IDs ───────────────────────────────────────────────────────────────
 
@@ -232,4 +234,38 @@ export function traceFeature<V, E extends { feature: string }, C>(
   }
 
   return [...result];
+}
+
+/**
+ * Computes the inset polygon for a cell based on adjacent edge features.
+ * Edges that border a road/river/wall are shrunk inward by the CLEARANCE amount.
+ * Returns an array of {x,y} points defining the inset polygon.
+ */
+export function computeCellInset<V, C>(
+  cell: Cell<C>,
+  mesh: Mesh<V, EdgeData, C>
+): Pt[] {
+  const vIds = cell.vertexIds;
+  const n    = vIds.length;
+  const pts  = vIds.map((id) => {
+    const v = mesh.vertices.get(id)!;
+    return { x: v.x, y: v.y } as Pt;
+  });
+
+  // For each edge i→(i+1), find its clearance
+  const edgeKey = (a: VertexId, b: VertexId) => a < b ? `${a}|${b}` : `${b}|${a}`;
+  const keyToEdge = new Map<string, EdgeData>();
+  for (const e of mesh.edges.values()) {
+    keyToEdge.set(edgeKey(e.a, e.b), e.data);
+  }
+
+  const insets: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = vIds[i], b = vIds[(i + 1) % n];
+    const edata = keyToEdge.get(edgeKey(a, b));
+    insets.push(edata ? CLEARANCE[edata.feature] : 0);
+  }
+
+  if (insets.every((v) => v === 0)) return pts;
+  return insetPolygon(pts, insets);
 }

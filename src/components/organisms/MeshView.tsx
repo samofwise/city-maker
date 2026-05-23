@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type PointerEvent } from "react";
-import { moveVertex, type VertexId } from "../../lib/mesh";
+import { moveVertex, computeCellInset, type VertexId } from "../../lib/mesh";
 import { generateCity, type CityMesh } from "../../lib/generate";
+import { toSvgPoints } from "../../lib/geometry";
 import {
   PALETTE,
   type CellData,
@@ -31,32 +32,15 @@ const TERRAIN_STROKE: Record<CellData["terrain"], string> = {
   empty:  PALETTE.paperDark,
 };
 
-const EDGE_STROKE: Record<EdgeData["feature"], string | null> = {
-  none:  null,
-  road:  PALETTE.roadOuter,
-  river: PALETTE.riverFill,
-  wall:  PALETTE.wallStroke,
-};
-
-const EDGE_WIDTH: Record<EdgeData["feature"], number> = {
-  none: 0,
-  road: 4,
-  river: 6,
-  wall: 3.5,
-};
-
-const VERTEX_FILL: Record<VertexData["feature"], string> = {
-  none:   "transparent",
-  gate:   PALETTE.gate,
-  bridge: PALETTE.bridge,
-  tower:  PALETTE.tower,
-};
-
-const VERTEX_R: Record<VertexData["feature"], number> = {
-  none:   0,
-  gate:   5,
-  bridge: 5,
-  tower:  6,
+// Slightly darker shade for the inset "buildable" polygon
+const INSET_FILL: Record<CellData["terrain"], string | null> = {
+  water:  null,
+  farm:   PALETTE.farmDark,
+  forest: PALETTE.forestDark,
+  city:   PALETTE.cityDark,
+  market: PALETTE.marketDark,
+  park:   PALETTE.parkDark,
+  empty:  null,
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -90,15 +74,31 @@ export const MeshView = () => {
 
   const onPointerUp = () => setDragging(null);
 
-  const v = (id: VertexId) => mesh.vertices.get(id)!;
+  const vpt = (id: VertexId) => mesh.vertices.get(id)!;
 
+  // Cell outer polygon point strings
   const cellPoints = useMemo(
     () =>
       new Map(
         [...mesh.cells.values()].map((c) => [
           c.id,
-          c.vertexIds.map((id) => `${v(id).x},${v(id).y}`).join(" "),
+          c.vertexIds.map((id) => `${vpt(id).x},${vpt(id).y}`).join(" "),
         ])
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mesh]
+  );
+
+  // Cell inset polygons (for clearance / buildable area visualisation)
+  const cellInsets = useMemo(
+    () =>
+      new Map(
+        [...mesh.cells.values()].map((c) => {
+          const insetFill = INSET_FILL[c.data.terrain];
+          if (!insetFill) return [c.id, null] as const;
+          const pts = computeCellInset(c, mesh);
+          return [c.id, toSvgPoints(pts)] as const;
+        })
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mesh]
@@ -114,81 +114,134 @@ export const MeshView = () => {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      {/* Cell fills */}
+      {/* ── Cell base fills ─────────────────────────────────────────────── */}
       {[...mesh.cells.values()].map((c) => (
         <polygon
           key={c.id}
           points={cellPoints.get(c.id)}
           fill={TERRAIN_FILL[c.data.terrain]}
           stroke={TERRAIN_STROKE[c.data.terrain]}
-          strokeWidth={0.8}
+          strokeWidth={0.7}
         />
       ))}
 
-      {/* Edge features (rivers rendered before roads, roads before walls) */}
-      {(["river", "road", "wall"] as EdgeData["feature"][]).map((layer) =>
-        [...mesh.edges.values()]
-          .filter((e) => e.data.feature === layer)
-          .map((e) => {
-            const va = v(e.a), vb = v(e.b);
-            return (
+      {/* ── Inset polygons (clearance from roads/rivers/walls visible) ──── */}
+      {[...mesh.cells.values()].map((c) => {
+        const insetPts = cellInsets.get(c.id);
+        if (!insetPts) return null;
+        return (
+          <polygon
+            key={`inset-${c.id}`}
+            points={insetPts}
+            fill={INSET_FILL[c.data.terrain]!}
+            stroke="none"
+            opacity={0.5}
+          />
+        );
+      })}
+
+      {/* ── Rivers (painted below roads/walls so roads cross over) ─────── */}
+      {[...mesh.edges.values()]
+        .filter((e) => e.data.feature === "river")
+        .map((e) => {
+          const va = vpt(e.a), vb = vpt(e.b);
+          return (
+            <g key={e.id}>
               <line
-                key={e.id}
-                x1={va.x} y1={va.y}
-                x2={vb.x} y2={vb.y}
-                stroke={EDGE_STROKE[layer]!}
-                strokeWidth={EDGE_WIDTH[layer]}
+                x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+                stroke={PALETTE.riverEdge}
+                strokeWidth={8}
                 strokeLinecap="round"
               />
-            );
-          })
-      )}
+              <line
+                x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+                stroke={PALETTE.riverFill}
+                strokeWidth={5.5}
+                strokeLinecap="round"
+              />
+            </g>
+          );
+        })}
 
-      {/* Road inner highlight (double-stroke technique from TownGeneratorOS) */}
+      {/* ── Roads (double-stroke TownGeneratorOS style) ─────────────────── */}
       {[...mesh.edges.values()]
         .filter((e) => e.data.feature === "road")
         .map((e) => {
-          const va = v(e.a), vb = v(e.b);
+          const va = vpt(e.a), vb = vpt(e.b);
+          return (
+            <g key={e.id}>
+              <line
+                x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+                stroke={PALETTE.roadOuter}
+                strokeWidth={5}
+                strokeLinecap="round"
+              />
+              <line
+                x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+                stroke={PALETTE.roadInner}
+                strokeWidth={2.2}
+                strokeLinecap="round"
+              />
+            </g>
+          );
+        })}
+
+      {/* ── Walls ───────────────────────────────────────────────────────── */}
+      {[...mesh.edges.values()]
+        .filter((e) => e.data.feature === "wall")
+        .map((e) => {
+          const va = vpt(e.a), vb = vpt(e.b);
           return (
             <line
-              key={`${e.id}-inner`}
-              x1={va.x} y1={va.y}
-              x2={vb.x} y2={vb.y}
-              stroke={PALETTE.roadInner}
-              strokeWidth={1.8}
-              strokeLinecap="round"
+              key={e.id}
+              x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+              stroke={PALETTE.wallStroke}
+              strokeWidth={3.5}
+              strokeLinecap="square"
             />
           );
         })}
 
-      {/* Vertex features (gates, bridges, towers) */}
+      {/* ── Vertex features ─────────────────────────────────────────────── */}
       {[...mesh.vertices.values()]
-        .filter((vx) => vx.data.feature !== "none")
-        .map((vx) => (
-          <circle
-            key={vx.id}
-            cx={vx.x}
-            cy={vx.y}
-            r={VERTEX_R[vx.data.feature]}
-            fill={VERTEX_FILL[vx.data.feature]}
-            stroke={PALETTE.wallStroke}
-            strokeWidth={1.5}
-          />
-        ))}
+        .filter((v) => v.data.feature !== "none")
+        .map((v) => {
+          const isGate   = v.data.feature === "gate";
+          const isTower  = v.data.feature === "tower";
+          const isBridge = v.data.feature === "bridge";
+          return (
+            <g key={v.id}>
+              {(isGate || isTower) && (
+                <circle
+                  cx={v.x} cy={v.y}
+                  r={isTower ? 7 : 5}
+                  fill={PALETTE.wallFill}
+                  stroke={PALETTE.wallStroke}
+                  strokeWidth={1.5}
+                />
+              )}
+              {isBridge && (
+                <>
+                  <circle cx={v.x} cy={v.y} r={6} fill={PALETTE.bridge} stroke={PALETTE.roadOuter} strokeWidth={1.5} />
+                  <line x1={v.x - 4} y1={v.y} x2={v.x + 4} y2={v.y} stroke="white" strokeWidth={1} />
+                </>
+              )}
+            </g>
+          );
+        })}
 
-      {/* Draggable vertices (shown as small dots, active while dragging = red) */}
-      {[...mesh.vertices.values()].map((vx) => (
+      {/* ── Draggable vertex handles ─────────────────────────────────────── */}
+      {[...mesh.vertices.values()].map((v) => (
         <circle
-          key={`drag-${vx.id}`}
-          cx={vx.x}
-          cy={vx.y}
-          r={dragging === vx.id ? 6 : 3.5}
-          fill={dragging === vx.id ? "#dc2626" : PALETTE.text}
-          opacity={dragging === vx.id ? 1 : 0.4}
+          key={`h-${v.id}`}
+          cx={v.x} cy={v.y}
+          r={dragging === v.id ? 7 : 4}
+          fill={dragging === v.id ? "#dc2626" : PALETTE.text}
+          opacity={dragging === v.id ? 1 : 0.35}
           stroke="white"
           strokeWidth={1}
           className="cursor-grab active:cursor-grabbing"
-          onPointerDown={onPointerDown(vx.id)}
+          onPointerDown={onPointerDown(v.id)}
         />
       ))}
     </svg>
