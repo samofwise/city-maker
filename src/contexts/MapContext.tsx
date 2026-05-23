@@ -10,11 +10,13 @@ import { mapReducer, type MapState, type MapAction } from "../lib/mapState";
 import { WIDTH, HEIGHT } from "../components/organisms/MeshView";
 
 const initialState: MapState = {
-  city:     generateCity(WIDTH, HEIGHT, 42),
-  editMode: false,
-  tool:     "select",
-  hovered:  null,
-  selected: null,
+  city:         generateCity(WIDTH, HEIGHT, 42),
+  editMode:     false,
+  tool:         "select",
+  hovered:      null,
+  selected:     null,
+  activeZoneId: null,
+  paintMode:    "add",
 };
 
 const MapCtx = createContext<{

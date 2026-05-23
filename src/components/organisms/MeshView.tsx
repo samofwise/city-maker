@@ -32,7 +32,8 @@ const TERRAIN_STROKE: Record<CellData["terrain"], string> = {
 export const MeshView = () => {
   const { state, dispatch } = useMap();
   const { city: { mesh }, editMode, tool, hovered, selected } = state;
-  const draggingRef = useRef<VertexId | null>(null);
+  const draggingRef  = useRef<VertexId | null>(null);
+  const paintingRef  = useRef(false);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const toSvgPoint = (e: PointerEvent<SVGElement>) => {
@@ -45,12 +46,26 @@ export const MeshView = () => {
     };
   };
 
+  // ── Paint cell (defined first; used by hover and click) ───────────────────
+
+  const paintCell = useCallback((id: CellId) => {
+    if (!editMode || tool !== "paint") return;
+    const { activeZoneId, paintMode } = state;
+    if (paintMode === "remove") {
+      dispatch({ type: "UNPAINT_CELL", id });
+    } else if (activeZoneId) {
+      dispatch({ type: "PAINT_CELL", id, zoneId: activeZoneId });
+    }
+  }, [editMode, tool, state, dispatch]);
+
   // ── Hover helpers ──────────────────────────────────────────────────────────
 
   const hoverCell = useCallback((id: CellId) => {
     if (!editMode || tool === "vertex") return;
     dispatch({ type: "HOVER", sel: { type: "cell", id } });
-  }, [editMode, tool, dispatch]);
+    // Drag-paint: paint as pointer moves over cells while button is down
+    if (tool === "paint" && paintingRef.current) paintCell(id);
+  }, [editMode, tool, dispatch, paintCell]);
 
   const hoverEdge = useCallback((id: EdgeId) => {
     if (!editMode || tool === "vertex") return;
@@ -81,10 +96,10 @@ export const MeshView = () => {
       dispatch({ type: "SELECT", sel: { type: "cell", id } });
     }
     if (tool === "paint") {
-      // Paint tool: set terrain to selected zone (handled in ZonePanel; stub here)
-      dispatch({ type: "SELECT", sel: { type: "cell", id } });
+      paintingRef.current = true;
+      paintCell(id);
     }
-  }, [editMode, tool, dispatch]);
+  }, [editMode, tool, dispatch, paintCell]);
 
   const clickEdge = useCallback((id: EdgeId) => {
     if (!editMode || tool !== "select") return;
@@ -116,6 +131,7 @@ export const MeshView = () => {
 
   const onSvgPointerUp = useCallback(() => {
     draggingRef.current = null;
+    paintingRef.current = false;
   }, []);
 
   // ── Computed vertex positions ──────────────────────────────────────────────
@@ -299,10 +315,10 @@ export const MeshView = () => {
                 points={cellPoints.get(c.id)}
                 fill="transparent"
                 stroke="none"
-                className="cursor-pointer"
+                style={{ cursor: tool === "paint" ? "crosshair" : "pointer" }}
                 onPointerEnter={() => hoverCell(c.id)}
                 onPointerLeave={clearHover}
-                onClick={() => clickCell(c.id)}
+                onPointerDown={() => clickCell(c.id)}
               />
             ))}
 
