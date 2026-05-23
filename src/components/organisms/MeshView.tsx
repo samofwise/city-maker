@@ -1,40 +1,21 @@
 import { useCallback, useMemo, useRef, type PointerEvent } from "react";
 import { traceFeature, type CellId, type EdgeId, type VertexId } from "../../lib/mesh";
-import { CellContent } from "./CellContent";
+import { CellPolygon, EdgeLine } from "./CellLayer";
 import { useMap } from "../../contexts/MapContext";
-import { PALETTE, type CellData, type EdgeData, type VertexData } from "../../lib/terrain";
+import { PALETTE, type VertexData } from "../../lib/terrain";
 
 export const WIDTH  = 800;
 export const HEIGHT = 600;
-
-const TERRAIN_FILL: Record<CellData["terrain"], string> = {
-  water:  PALETTE.water,
-  farm:   PALETTE.farm,
-  forest: PALETTE.forest,
-  city:   PALETTE.city,
-  market: PALETTE.market,
-  park:   PALETTE.park,
-  empty:  PALETTE.empty,
-};
-
-const TERRAIN_STROKE: Record<CellData["terrain"], string> = {
-  water:  PALETTE.waterDark,
-  farm:   PALETTE.farmDark,
-  forest: PALETTE.forestDark,
-  city:   PALETTE.cityDark,
-  market: PALETTE.marketDark,
-  park:   PALETTE.parkDark,
-  empty:  PALETTE.paperDark,
-};
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export const MeshView = () => {
   const { state, dispatch } = useMap();
   const { city: { mesh }, editMode, tool, hovered, selected } = state;
+
   const draggingRef  = useRef<VertexId | null>(null);
   const paintingRef  = useRef(false);
-  const svgRef = useRef<SVGSVGElement>(null);
+  const svgRef       = useRef<SVGSVGElement>(null);
 
   const toSvgPoint = (e: PointerEvent<SVGElement>) => {
     const svg = svgRef.current;
@@ -46,7 +27,7 @@ export const MeshView = () => {
     };
   };
 
-  // ── Paint cell (defined first; used by hover and click) ───────────────────
+  // ── Paint cell ─────────────────────────────────────────────────────────────
 
   const paintCell = useCallback((id: CellId) => {
     if (!editMode || tool !== "paint") return;
@@ -63,20 +44,15 @@ export const MeshView = () => {
   const hoverCell = useCallback((id: CellId) => {
     if (!editMode || tool === "vertex") return;
     dispatch({ type: "HOVER", sel: { type: "cell", id } });
-    // Drag-paint: paint as pointer moves over cells while button is down
     if (tool === "paint" && paintingRef.current) paintCell(id);
   }, [editMode, tool, dispatch, paintCell]);
 
   const hoverEdge = useCallback((id: EdgeId) => {
-    if (!editMode || tool === "vertex") return;
+    if (!editMode || tool !== "select") return;
     const e = mesh.edges.get(id);
     if (!e) return;
-    if (e.data.feature !== "none") {
-      const traceIds = traceFeature(mesh, id);
-      dispatch({ type: "HOVER", sel: { type: "edge", id, traceIds } });
-    } else {
-      dispatch({ type: "HOVER", sel: { type: "edge", id } });
-    }
+    const traceIds = e.data.feature !== "none" ? traceFeature(mesh, id) : undefined;
+    dispatch({ type: "HOVER", sel: { type: "edge", id, traceIds } });
   }, [editMode, tool, mesh, dispatch]);
 
   const hoverVertex = useCallback((id: VertexId) => {
@@ -92,13 +68,8 @@ export const MeshView = () => {
 
   const clickCell = useCallback((id: CellId) => {
     if (!editMode) return;
-    if (tool === "select") {
-      dispatch({ type: "SELECT", sel: { type: "cell", id } });
-    }
-    if (tool === "paint") {
-      paintingRef.current = true;
-      paintCell(id);
-    }
+    if (tool === "select") dispatch({ type: "SELECT", sel: { type: "cell", id } });
+    if (tool === "paint")  { paintingRef.current = true; paintCell(id); }
   }, [editMode, tool, dispatch, paintCell]);
 
   const clickEdge = useCallback((id: EdgeId) => {
@@ -114,7 +85,7 @@ export const MeshView = () => {
     dispatch({ type: "SELECT", sel: { type: "vertex", id } });
   }, [editMode, tool, dispatch]);
 
-  // ── Vertex drag (vertex tool) ──────────────────────────────────────────────
+  // ── Vertex drag ────────────────────────────────────────────────────────────
 
   const onVertexPointerDown = useCallback((id: VertexId) => (e: PointerEvent<SVGCircleElement>) => {
     if (!editMode || tool !== "vertex") return;
@@ -134,22 +105,25 @@ export const MeshView = () => {
     paintingRef.current = false;
   }, []);
 
-  // ── Computed vertex positions ──────────────────────────────────────────────
+  // ── Stable vertex position accessor ───────────────────────────────────────
 
   const vpt = useCallback((id: VertexId) => mesh.vertices.get(id)!, [mesh]);
+
+  // ── Per-cell points strings (stable keys → React.memo skips unaffected) ───
 
   const cellPoints = useMemo(
     () =>
       new Map(
         [...mesh.cells.values()].map((c) => [
           c.id,
-          c.vertexIds.map((id) => `${vpt(id).x},${vpt(id).y}`).join(" "),
+          c.vertexIds.map((id) => `${vpt(id).x.toFixed(2)},${vpt(id).y.toFixed(2)}`).join(" "),
         ])
       ),
     [mesh, vpt]
   );
 
-  // Sets of highlighted edge IDs
+  // ── Highlighted edge sets ──────────────────────────────────────────────────
+
   const hoveredEdgeIds = useMemo(
     () => new Set(hovered?.type === "edge" ? (hovered.traceIds ?? [hovered.id as EdgeId]) : []),
     [hovered]
@@ -159,7 +133,15 @@ export const MeshView = () => {
     [selected]
   );
 
-  const showVertexHandles = editMode && tool === "vertex";
+  // ── Vertex drag highlight: cells/edges adjacent to dragged vertex ──────────
+
+  const dragVertex = draggingRef.current;
+  const dragHighlightCells = useMemo(() => {
+    if (!dragVertex) return new Set<CellId>();
+    return new Set(mesh.index.vertexCells.get(dragVertex) ?? []);
+  }, [dragVertex, mesh.index]);
+
+  const toolCursor = tool === "paint" ? "crosshair" : "pointer";
 
   return (
     <svg
@@ -172,61 +154,50 @@ export const MeshView = () => {
       onPointerCancel={onSvgPointerUp}
       onPointerLeave={clearHover}
     >
-      {/* ── Cell base fills ─────────────────────────────────────────────── */}
-      {[...mesh.cells.values()].map((c) => (
-        <polygon
-          key={c.id}
-          points={cellPoints.get(c.id)}
-          fill={TERRAIN_FILL[c.data.terrain]}
-          stroke={TERRAIN_STROKE[c.data.terrain]}
-          strokeWidth={0.7}
-        />
-      ))}
+      {/* ── Cells (memoised — only affected cells re-render on vertex drag) ── */}
+      {[...mesh.cells.values()].map((c) => {
+        const isHovered  = hovered?.type === "cell" && hovered.id === c.id;
+        const isSelected = selected?.type === "cell" && selected.id === c.id;
+        return (
+          <CellPolygon
+            key={c.id}
+            cell={c}
+            mesh={mesh}
+            pointsStr={cellPoints.get(c.id) ?? ""}
+            isHovered={isHovered || (editMode && tool === "vertex" && dragHighlightCells.has(c.id))}
+            isSelected={isSelected}
+            onEnter={hoverCell}
+            onLeave={clearHover}
+            onDown={clickCell}
+            editMode={editMode && tool !== "vertex"}
+            toolCursor={toolCursor}
+          />
+        );
+      })}
 
-      {/* ── Cell content ────────────────────────────────────────────────── */}
-      {[...mesh.cells.values()].map((c) => (
-        <CellContent key={`cc-${c.id}`} cell={c} mesh={mesh} />
-      ))}
-
-      {/* ── Rivers ──────────────────────────────────────────────────────── */}
+      {/* ── Edges (rivers first, then roads, then walls) ─────────────────── */}
       {[...mesh.edges.values()]
-        .filter((e) => e.data.feature === "river")
+        .filter((e) => e.data.feature !== "none")
+        .sort((a, b) => {
+          const order: Record<string, number> = { river: 0, road: 1, wall: 2 };
+          return (order[a.data.feature] ?? 3) - (order[b.data.feature] ?? 3);
+        })
         .map((e) => {
           const va = vpt(e.a), vb = vpt(e.b);
           return (
-            <g key={e.id}>
-              <line x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                stroke={PALETTE.riverEdge} strokeWidth={8} strokeLinecap="round" />
-              <line x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                stroke={PALETTE.riverFill} strokeWidth={5.5} strokeLinecap="round" />
-            </g>
-          );
-        })}
-
-      {/* ── Roads ───────────────────────────────────────────────────────── */}
-      {[...mesh.edges.values()]
-        .filter((e) => e.data.feature === "road")
-        .map((e) => {
-          const va = vpt(e.a), vb = vpt(e.b);
-          return (
-            <g key={e.id}>
-              <line x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                stroke={PALETTE.roadOuter} strokeWidth={5} strokeLinecap="round" />
-              <line x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                stroke={PALETTE.roadInner} strokeWidth={2.2} strokeLinecap="round" />
-            </g>
-          );
-        })}
-
-      {/* ── Walls ───────────────────────────────────────────────────────── */}
-      {[...mesh.edges.values()]
-        .filter((e) => e.data.feature === "wall")
-        .map((e) => {
-          const va = vpt(e.a), vb = vpt(e.b);
-          return (
-            <line key={e.id}
+            <EdgeLine
+              key={e.id}
+              edgeId={e.id}
               x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-              stroke={PALETTE.wallStroke} strokeWidth={3.5} strokeLinecap="square" />
+              feature={e.data.feature}
+              isHovered={hoveredEdgeIds.has(e.id)}
+              isSelected={selectedEdgeIds.has(e.id)}
+              onEnter={hoverEdge}
+              onLeave={clearHover}
+              onClick={clickEdge}
+              editMode={editMode}
+              showHitArea={tool === "select"}
+            />
           );
         })}
 
@@ -249,133 +220,90 @@ export const MeshView = () => {
                     stroke="white" strokeWidth={1} />
                 </>
               )}
-            </g>
-          );
-        })}
-
-      {/* ── Edit mode: hover / selection overlays ─────────────────────────── */}
-      {editMode && (
-        <g>
-          {/* Cell hover + selection overlays */}
-          {[...mesh.cells.values()].map((c) => {
-            const isHov = hovered?.type === "cell" && hovered.id === c.id;
-            const isSel = selected?.type === "cell" && selected.id === c.id;
-            if (!isHov && !isSel) return null;
-            return (
-              <polygon
-                key={`ov-${c.id}`}
-                points={cellPoints.get(c.id)}
-                fill={isSel ? PALETTE.selected : PALETTE.hover}
-                stroke={isSel ? "#d97706" : "#f59e0b"}
-                strokeWidth={isSel ? 2 : 1}
-                pointerEvents="none"
-              />
-            );
-          })}
-
-          {/* Edge hover + selection overlays */}
-          {[...mesh.edges.values()].map((e) => {
-            const isHov = hoveredEdgeIds.has(e.id);
-            const isSel = selectedEdgeIds.has(e.id);
-            if (!isHov && !isSel) return null;
-            const va = vpt(e.a), vb = vpt(e.b);
-            return (
-              <line key={`ov-${e.id}`}
-                x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                stroke={isSel ? "#d97706" : "#f59e0b"}
-                strokeWidth={isSel ? 8 : 7}
-                strokeLinecap="round"
-                opacity={0.45}
-                pointerEvents="none"
-              />
-            );
-          })}
-
-          {/* Vertex hover + selection overlays */}
-          {[...mesh.vertices.values()].map((v) => {
-            const isHov = hovered?.type === "vertex" && hovered.id === v.id;
-            const isSel = selected?.type === "vertex" && selected.id === v.id;
-            if (!isHov && !isSel) return null;
-            return (
-              <circle key={`ov-${v.id}`}
-                cx={v.x} cy={v.y} r={10}
-                fill={isSel ? PALETTE.selected : PALETTE.hover}
-                stroke={isSel ? "#d97706" : "#f59e0b"}
-                strokeWidth={1.5}
-                pointerEvents="none"
-              />
-            );
-          })}
-
-          {/* ── Hit areas for cells ──────────────────────────────────────── */}
-          {tool !== "vertex" &&
-            [...mesh.cells.values()].map((c) => (
-              <polygon
-                key={`hit-c-${c.id}`}
-                points={cellPoints.get(c.id)}
-                fill="transparent"
-                stroke="none"
-                style={{ cursor: tool === "paint" ? "crosshair" : "pointer" }}
-                onPointerEnter={() => hoverCell(c.id)}
-                onPointerLeave={clearHover}
-                onPointerDown={() => clickCell(c.id)}
-              />
-            ))}
-
-          {/* ── Hit areas for edges ──────────────────────────────────────── */}
-          {tool === "select" &&
-            [...mesh.edges.values()].map((e) => {
-              if (e.data.feature === "none") return null;
-              const va = vpt(e.a), vb = vpt(e.b);
-              return (
-                <line
-                  key={`hit-e-${e.id}`}
-                  x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
-                  stroke="transparent"
-                  strokeWidth={12}
-                  strokeLinecap="round"
-                  className="cursor-pointer"
-                  onPointerEnter={() => hoverEdge(e.id)}
-                  onPointerLeave={clearHover}
-                  onClick={() => clickEdge(e.id)}
-                />
-              );
-            })}
-
-          {/* ── Hit areas for vertices (select tool) ─────────────────────── */}
-          {tool === "select" &&
-            [...mesh.vertices.values()]
-              .filter((v) => v.data.feature !== "none")
-              .map((v) => (
-                <circle
-                  key={`hit-v-${v.id}`}
-                  cx={v.x} cy={v.y} r={12}
-                  fill="transparent"
-                  stroke="none"
+              {/* Vertex selection overlay */}
+              {editMode && tool === "select" && (
+                <circle cx={v.x} cy={v.y} r={12}
+                  fill={selected?.type === "vertex" && selected.id === v.id ? PALETTE.selected : "transparent"}
+                  stroke={hovered?.type === "vertex" && hovered.id === v.id ? "#f59e0b" : "transparent"}
+                  strokeWidth={2}
                   className="cursor-pointer"
                   onPointerEnter={() => hoverVertex(v.id)}
                   onPointerLeave={clearHover}
                   onClick={() => clickVertex(v.id)}
                 />
-              ))}
+              )}
+            </g>
+          );
+        })}
+
+      {/* ── Vertex drag handles (vertex tool) ────────────────────────────── */}
+      {editMode && tool === "vertex" && (
+        <g>
+          {/* Guide lines from dragged vertex to its neighbours */}
+          {draggingRef.current &&
+            (mesh.index.vertexEdges.get(draggingRef.current) ?? []).map((eid) => {
+              const e  = mesh.edges.get(eid)!;
+              const va = vpt(e.a), vb = vpt(e.b);
+              return (
+                <line key={`guide-${eid}`}
+                  x1={va.x} y1={va.y} x2={vb.x} y2={vb.y}
+                  stroke="#d97706" strokeWidth={1} strokeDasharray="4 3" opacity={0.6}
+                  pointerEvents="none"
+                />
+              );
+            })}
+
+          {[...mesh.vertices.values()].map((v) => {
+            const isDragging = draggingRef.current === v.id;
+            const isHov      = hovered?.type === "vertex" && hovered.id === v.id;
+            const feat       = v.data.feature as VertexData["feature"];
+            const hasFeat    = feat !== "none";
+            return (
+              <g key={`vh-${v.id}`}>
+                {/* Feature symbol background (so it's visible through the handle) */}
+                {hasFeat && (
+                  <circle cx={v.x} cy={v.y} r={isDragging ? 9 : 6}
+                    fill={PALETTE.wallFill} stroke={PALETTE.wallStroke} strokeWidth={1}
+                    pointerEvents="none"
+                  />
+                )}
+                {/* Drag handle */}
+                <circle
+                  cx={v.x} cy={v.y}
+                  r={isDragging ? 8 : isHov ? 6 : 4.5}
+                  fill={isDragging ? "#dc2626" : isHov ? PALETTE.selected : "rgba(255,255,255,0.85)"}
+                  stroke={isDragging ? "#991b1b" : PALETTE.roadOuter}
+                  strokeWidth={isDragging ? 2 : 1.5}
+                  className="cursor-grab active:cursor-grabbing"
+                  onPointerEnter={() => hoverVertex(v.id)}
+                  onPointerLeave={clearHover}
+                  onPointerDown={onVertexPointerDown(v.id)}
+                />
+              </g>
+            );
+          })}
+
+          {/* Live coordinate tooltip for dragged vertex */}
+          {draggingRef.current && (() => {
+            const v = vpt(draggingRef.current);
+            return (
+              <g pointerEvents="none">
+                <rect
+                  x={v.x + 10} y={v.y - 22}
+                  width={80} height={16}
+                  rx={3} fill="rgba(0,0,0,0.6)"
+                />
+                <text
+                  x={v.x + 14} y={v.y - 10}
+                  fill="white" fontSize={10} fontFamily="monospace"
+                >
+                  {v.x.toFixed(0)}, {v.y.toFixed(0)}
+                </text>
+              </g>
+            );
+          })()}
         </g>
       )}
-
-      {/* ── Vertex drag handles (vertex tool only) ────────────────────────── */}
-      {showVertexHandles &&
-        [...mesh.vertices.values()].map((v) => (
-          <circle
-            key={`vh-${v.id}`}
-            cx={v.x} cy={v.y} r={5}
-            fill={PALETTE.selected}
-            stroke={PALETTE.roadOuter}
-            strokeWidth={1.5}
-            className="cursor-grab active:cursor-grabbing"
-            onPointerEnter={() => hoverVertex(v.id)}
-            onPointerLeave={clearHover}
-            onPointerDown={onVertexPointerDown(v.id)}
-          />
-        ))}
     </svg>
   );
 };
