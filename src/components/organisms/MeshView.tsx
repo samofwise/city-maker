@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type PointerEvent } from "react";
-import { moveVertex, computeCellInset, type VertexId } from "../../lib/mesh";
+import { moveVertex, type VertexId } from "../../lib/mesh";
 import { generateCity, type CityMesh } from "../../lib/generate";
-import { toSvgPoints } from "../../lib/geometry";
+import { CellContent } from "./CellContent";
 import {
   PALETTE,
   type CellData,
@@ -30,17 +30,6 @@ const TERRAIN_STROKE: Record<CellData["terrain"], string> = {
   market: PALETTE.marketDark,
   park:   PALETTE.parkDark,
   empty:  PALETTE.paperDark,
-};
-
-// Slightly darker shade for the inset "buildable" polygon
-const INSET_FILL: Record<CellData["terrain"], string | null> = {
-  water:  null,
-  farm:   PALETTE.farmDark,
-  forest: PALETTE.forestDark,
-  city:   PALETTE.cityDark,
-  market: PALETTE.marketDark,
-  park:   PALETTE.parkDark,
-  empty:  null,
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -89,21 +78,6 @@ export const MeshView = () => {
     [mesh]
   );
 
-  // Cell inset polygons (for clearance / buildable area visualisation)
-  const cellInsets = useMemo(
-    () =>
-      new Map(
-        [...mesh.cells.values()].map((c) => {
-          const insetFill = INSET_FILL[c.data.terrain];
-          if (!insetFill) return [c.id, null] as const;
-          const pts = computeCellInset(c, mesh);
-          return [c.id, toSvgPoints(pts)] as const;
-        })
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mesh]
-  );
-
   return (
     <svg
       ref={svgRef}
@@ -125,20 +99,10 @@ export const MeshView = () => {
         />
       ))}
 
-      {/* ── Inset polygons (clearance from roads/rivers/walls visible) ──── */}
-      {[...mesh.cells.values()].map((c) => {
-        const insetPts = cellInsets.get(c.id);
-        if (!insetPts) return null;
-        return (
-          <polygon
-            key={`inset-${c.id}`}
-            points={insetPts}
-            fill={INSET_FILL[c.data.terrain]!}
-            stroke="none"
-            opacity={0.5}
-          />
-        );
-      })}
+      {/* ── Cell content (buildings, trees, crops, water ripples) ─────── */}
+      {[...mesh.cells.values()].map((c) => (
+        <CellContent key={`cc-${c.id}`} cell={c} mesh={mesh} />
+      ))}
 
       {/* ── Rivers (painted below roads/walls so roads cross over) ─────── */}
       {[...mesh.edges.values()]
