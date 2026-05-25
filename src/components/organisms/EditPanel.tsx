@@ -14,8 +14,7 @@ const TERRAIN_OPTIONS: TerrainType[] = [
   "farm",
   "forest",
   "city",
-  "market",
-  "park",
+  "grass",
   "empty",
 ];
 

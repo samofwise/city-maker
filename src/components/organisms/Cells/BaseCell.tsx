@@ -4,20 +4,15 @@
  * ripples) is owned by the individual Cell components in this folder.
  */
 import { useMemo } from "react";
-import {
-  computeCellInset,
-  type Cell,
-  type VertexId,
-} from "../../../lib/mesh";
+import { computeCellInset, type Cell, type VertexId } from "../../../lib/mesh";
 import type { CellData } from "../../../lib/terrain";
 import type { CityMesh } from "../../../types/CityMap";
 import { CityCell } from "./CityCell";
 import { EmptyCell } from "./EmptyCell";
 import { FarmCell } from "./FarmCell";
 import { ForestCell } from "./ForestCell";
-import { MarketCell } from "./MarketCell";
-import { ParkCell } from "./ParkCell";
-import { WaterCell } from "./WaterCell";
+import { GrassCell } from "./GrassCell";
+import { OceanCell } from "./OceanCell";
 
 interface BaseCellProps {
   cell: Cell<CellData>;
@@ -48,17 +43,15 @@ export const BaseCell = ({ cell, mesh }: BaseCellProps) => {
   switch (terrain) {
     case "city":
       return <CityCell {...props} />;
-    case "market":
-      return <MarketCell {...props} />;
-    case "forest":
-      return <ForestCell {...props} />;
-    case "park":
-      return <ParkCell {...props} />;
-    case "farm":
-      return <FarmCell {...props} />;
-    case "water":
-      return <WaterCell {...props} />;
-    case "empty":
+    // case "forest":
+    //   return <ForestCell {...props} />;
+    // case "farm":
+    //   return <FarmCell {...props} />;
+    // case "grass":
+    //   return <GrassCell {...props} />;
+    // case "water":
+    //   return <WaterCell {...props} />;
+    default:
       return <EmptyCell />;
   }
 };

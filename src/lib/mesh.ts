@@ -29,6 +29,7 @@ export interface Cell<C = unknown> {
   vertexIds: VertexId[]; // ordered polygon ring
   siteX: number; // original Voronoi seed x
   siteY: number; // original Voronoi seed y
+  distanceFromCenter: number;
   data: C;
 }
 
@@ -178,6 +179,169 @@ export function moveVertex(
     v.x = x;
     v.y = y;
   }
+}
+
+// ── Lloyd's relaxation ───────────────────────────────────────────────────────
+
+/**
+ * Lloyd's relaxation: each iteration moves every selected site to the area
+ * centroid of its Voronoi cell. Smooths out clustered sites and produces more
+ * uniformly sized cells. Pass `indices` to relax only a subset (e.g. just the
+ * central sites that will end up in the final mesh).
+ *
+ * Returns a new array of sites; the input is not mutated.
+ */
+export function lloydRelax(
+  sites: { x: number; y: number }[],
+  bounds: [number, number, number, number],
+  iterations: number,
+  indices?: number[]
+): { x: number; y: number }[] {
+  const out = sites.map((s) => ({ x: s.x, y: s.y }));
+  const relaxSet = indices ?? out.map((_, i) => i);
+  for (let it = 0; it < iterations; it++) {
+    const delaunay = Delaunay.from(
+      out,
+      (p) => p.x,
+      (p) => p.y
+    );
+    const voronoi = delaunay.voronoi(bounds);
+    for (const i of relaxSet) {
+      const poly = voronoi.cellPolygon(i);
+      if (!poly) continue;
+      // Area-weighted centroid via shoelace.
+      let area = 0,
+        cx = 0,
+        cy = 0;
+      const n = poly.length - 1; // last vertex duplicates the first
+      for (let k = 0; k < n; k++) {
+        const [x0, y0] = poly[k]!;
+        const [x1, y1] = poly[(k + 1) % n]!;
+        const cross = x0 * y1 - x1 * y0;
+        area += cross;
+        cx += (x0 + x1) * cross;
+        cy += (y0 + y1) * cross;
+      }
+      area *= 0.5;
+      if (Math.abs(area) < 1e-9) continue;
+      out[i] = { x: cx / (6 * area), y: cy / (6 * area) };
+    }
+  }
+  return out;
+}
+
+// ── Prune ────────────────────────────────────────────────────────────────────
+
+/**
+ * Removes every cell not in `keepCellIds`. Also removes vertices and edges that
+ * are no longer referenced by any kept cell, and rebuilds the index. The mesh
+ * is mutated in place.
+ */
+export function pruneMesh<V, E, C>(
+  mesh: Mesh<V, E, C>,
+  keepCellIds: Set<CellId>
+): void {
+  for (const cellId of [...mesh.cells.keys()]) {
+    if (!keepCellIds.has(cellId)) mesh.cells.delete(cellId);
+  }
+
+  const usedVertices = new Set<VertexId>();
+  for (const cell of mesh.cells.values()) {
+    for (const vid of cell.vertexIds) usedVertices.add(vid);
+  }
+
+  for (const vid of [...mesh.vertices.keys()]) {
+    if (!usedVertices.has(vid)) mesh.vertices.delete(vid);
+  }
+
+  for (const [eid, edge] of mesh.edges) {
+    if (!usedVertices.has(edge.a) || !usedVertices.has(edge.b)) {
+      mesh.edges.delete(eid);
+    }
+  }
+
+  mesh.index = buildIndex(mesh.cells, mesh.edges);
+}
+
+// ── Junction optimisation ────────────────────────────────────────────────────
+
+/**
+ * Port of TownGeneratorOS `optimizeJunctions` (Model.hx:308-344).
+ * Walks every cell's vertex ring and merges adjacent vertex pairs that are
+ * closer than `threshold` units into a single midpoint vertex. Rewrites
+ * references in neighbouring cells, deletes the redundant vertex/edges, and
+ * rebuilds the index.
+ *
+ * Call this AFTER the mesh is built and pruned but BEFORE any edge-feature
+ * assignment, since merging collapses some edges.
+ */
+export function optimizeJunctions<V, E, C>(
+  mesh: Mesh<V, E, C>,
+  threshold: number
+): void {
+  const dedupRing = (ids: VertexId[]): VertexId[] => {
+    if (ids.length < 2) return ids;
+    const out: VertexId[] = [];
+    for (const id of ids) {
+      if (out.length === 0 || out[out.length - 1] !== id) out.push(id);
+    }
+    while (out.length > 1 && out[0] === out[out.length - 1]) out.pop();
+    return out;
+  };
+
+  let merged = true;
+  let guard = 0;
+  while (merged && guard++ < 200) {
+    merged = false;
+
+    outer: for (const cell of mesh.cells.values()) {
+      const vIds = cell.vertexIds;
+      if (vIds.length < 3) continue;
+
+      for (let i = 0; i < vIds.length; i++) {
+        const a = vIds[i]!;
+        const b = vIds[(i + 1) % vIds.length]!;
+        if (a === b) continue;
+        const va = mesh.vertices.get(a);
+        const vb = mesh.vertices.get(b);
+        if (!va || !vb) continue;
+
+        const d = Math.hypot(va.x - vb.x, va.y - vb.y);
+        if (d >= threshold) continue;
+
+        // Merge b → a, move a to midpoint.
+        va.x = (va.x + vb.x) / 2;
+        va.y = (va.y + vb.y) / 2;
+
+        for (const other of mesh.cells.values()) {
+          other.vertexIds = dedupRing(
+            other.vertexIds.map((id) => (id === b ? a : id))
+          );
+        }
+
+        for (const [eid, edge] of mesh.edges) {
+          if (edge.a === b) edge.a = a;
+          if (edge.b === b) edge.b = a;
+          if (edge.a === edge.b) mesh.edges.delete(eid);
+        }
+
+        // Drop duplicate (a, b)-equivalent edges.
+        const seen = new Map<string, EdgeId>();
+        for (const [eid, edge] of mesh.edges) {
+          const k = edge.a < edge.b ? `${edge.a}|${edge.b}` : `${edge.b}|${edge.a}`;
+          if (seen.has(k)) mesh.edges.delete(eid);
+          else seen.set(k, eid);
+        }
+
+        mesh.vertices.delete(b);
+
+        merged = true;
+        break outer;
+      }
+    }
+  }
+
+  mesh.index = buildIndex(mesh.cells, mesh.edges);
 }
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────

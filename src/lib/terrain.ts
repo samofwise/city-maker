@@ -5,8 +5,7 @@ export type TerrainType =
   | "farm"
   | "forest"
   | "city"
-  | "market"
-  | "park"
+  | "grass"
   | "empty";
 
 export type EdgeFeature = "none" | "road" | "river" | "wall";
@@ -72,10 +71,8 @@ export const PALETTE = {
   forestDark:"#4e7040",
   city:     "#d4b896",
   cityDark: "#b89670",
-  market:   "#e8d090",
-  marketDark:"#c8b060",
-  park:     "#90b878",
-  parkDark: "#6a9058",
+  grass:    "#b8d090",
+  grassDark:"#90a868",
   empty:    "#e8d8b8",
 
   // Edges

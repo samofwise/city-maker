@@ -141,33 +141,46 @@ export function cutPolygon(
   if (half1.length < 3 || half2.length < 3) return null;
 
   if (gap > 0) {
-    applyAlleyGap(half1, I1, I2, gap / 2);
-    applyAlleyGap(half2, I2, I1, gap / 2);
+    const peeled1 = peel(half1, I1, I2, gap / 2);
+    const peeled2 = peel(half2, I2, I1, gap / 2);
+    if (peeled1.length < 3 || peeled2.length < 3) return null;
+    return [peeled1, peeled2];
   }
 
   return [half1, half2];
 }
 
 /**
- * Moves the two intersection points that form the "cut edge" inward by `d`,
- * perpendicular to the cut direction — creating alley clearance.
+ * TownGen `Polygon.peel`: shift the cut edge inward by `d` (perpendicular to
+ * the cut, toward the polygon centroid) and re-cut. The returned polygon is
+ * the original minus a strip of width `d` along the cut edge. Unlike a naïve
+ * "translate the two cut endpoints" approximation, the new endpoints land
+ * *on* the original polygon's side edges, so the polygon's silhouette stays
+ * aligned with the parent block — important across many recursion levels.
  */
-function applyAlleyGap(pts: Pt[], cutA: Pt, cutB: Pt, d: number): void {
-  const cen = centroid(pts);
-  const cutDir  = norm(sub(cutB, cutA));
-  const cutPerp = perp(cutDir);
-  const mid     = interpolatePt(cutA, cutB, 0.5);
-  const toCen   = sub(cen, mid);
-  const sign    = dot(toCen, cutPerp) >= 0 ? 1 : -1;
-  const shift   = scale(cutPerp, sign * d);
+function peel(half: Pt[], cutA: Pt, cutB: Pt, d: number): Pt[] {
+  const cutVec = sub(cutB, cutA);
+  if (Math.hypot(cutVec.x, cutVec.y) < 1e-8) return half;
 
-  for (const p of pts) {
-    if (Math.hypot(p.x - cutA.x, p.y - cutA.y) < 1e-4 ||
-        Math.hypot(p.x - cutB.x, p.y - cutB.y) < 1e-4) {
-      p.x += shift.x;
-      p.y += shift.y;
-    }
-  }
+  const cutPerp = perp(norm(cutVec));
+  const cen = centroid(half);
+  const mid = interpolatePt(cutA, cutB, 0.5);
+  const sign = dot(sub(cen, mid), cutPerp) >= 0 ? 1 : -1;
+  const shift = scale(cutPerp, sign * d);
+
+  const a = add(cutA, shift);
+  const b = add(cutB, shift);
+
+  const halves = cutPolygon(half, a, b, 0);
+  if (!halves) return half;
+
+  // Return the side that excludes the original cut endpoints.
+  const near = (p: Pt, q: Pt) =>
+    Math.abs(p.x - q.x) < 1e-3 && Math.abs(p.y - q.y) < 1e-3;
+  const containsCutEdge = (poly: Pt[]) =>
+    poly.some((p) => near(p, cutA) || near(p, cutB));
+
+  return containsCutEdge(halves[0]) ? halves[1] : halves[0];
 }
 
 export function toSvgPoints(pts: Pt[]): string {

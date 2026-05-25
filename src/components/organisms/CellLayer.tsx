@@ -6,16 +6,15 @@
 import { memo } from "react";
 import type { Cell } from "../../lib/mesh";
 import { PALETTE, type CellData } from "../../lib/terrain";
-import { BaseCell } from "./Cells/BaseCell";
 import type { CityMesh } from "../../types/CityMap";
+import { BaseCell } from "./Cells/BaseCell";
 
 const TERRAIN_FILL: Record<CellData["terrain"], string> = {
   water: PALETTE.water,
   farm: PALETTE.farm,
   forest: PALETTE.forest,
   city: PALETTE.city,
-  market: PALETTE.market,
-  park: PALETTE.park,
+  grass: PALETTE.grass,
   empty: PALETTE.empty,
 };
 
@@ -24,8 +23,7 @@ const TERRAIN_STROKE: Record<CellData["terrain"], string> = {
   farm: PALETTE.farmDark,
   forest: PALETTE.forestDark,
   city: PALETTE.cityDark,
-  market: PALETTE.marketDark,
-  park: PALETTE.parkDark,
+  grass: PALETTE.grassDark,
   empty: PALETTE.paperDark,
 };
 
