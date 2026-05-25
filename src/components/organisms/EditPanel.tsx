@@ -1,25 +1,43 @@
+import { type Dispatch, type SetStateAction } from "react";
 import { useMap } from "../../contexts/MapContext";
 import {
-  PALETTE,
-  type TerrainType,
   type EdgeFeature,
+  type TerrainType,
   type VertexFeature,
 } from "../../lib/terrain";
+import type { CityMap } from "../../types/CityMap";
+import type { CellId, EdgeId, VertexId } from "../../lib/mesh";
+import { updateCell, updateEdge, updateVertex } from "../../lib/cityMutations";
 
 const TERRAIN_OPTIONS: TerrainType[] = [
-  "water", "farm", "forest", "city", "market", "park", "empty",
+  "water",
+  "farm",
+  "forest",
+  "city",
+  "market",
+  "park",
+  "empty",
 ];
 
 const EDGE_FEATURE_OPTIONS: EdgeFeature[] = ["none", "road", "river", "wall"];
-const VERTEX_FEATURE_OPTIONS: VertexFeature[] = ["none", "gate", "bridge", "tower"];
+const VERTEX_FEATURE_OPTIONS: VertexFeature[] = [
+  "none",
+  "gate",
+  "bridge",
+  "tower",
+];
 
 const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// ── Panel ──────────────────────────────────────────────────────────────────────
+interface EditPanelProps {
+  city:    CityMap;
+  setCity: Dispatch<SetStateAction<CityMap | null>>;
+}
 
-export const EditPanel = () => {
-  const { state, dispatch } = useMap();
-  const { selected, city: { mesh, zones } } = state;
+export const EditPanel = ({ city, setCity }: EditPanelProps) => {
+  const { state } = useMap();
+  const { selected } = state;
+  const { mesh, zones } = city;
 
   if (!selected) {
     return (
@@ -29,9 +47,8 @@ export const EditPanel = () => {
     );
   }
 
-  // ── Cell panel ─────────────────────────────────────────────────────────────
   if (selected.type === "cell") {
-    const cell = mesh.cells.get(selected.id as import("../../lib/mesh").CellId);
+    const cell = mesh.cells.get(selected.id as CellId);
     if (!cell) return null;
     const d = cell.data;
     const zone = d.zoneId ? zones.get(d.zoneId) : undefined;
@@ -46,15 +63,15 @@ export const EditPanel = () => {
             className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
             value={d.terrain}
             onChange={(e) =>
-              dispatch({
-                type: "UPDATE_CELL",
-                id: cell.id,
-                patch: { terrain: e.target.value as TerrainType },
-              })
+              setCity((c) =>
+                c ? updateCell(c, cell.id, { terrain: e.target.value as TerrainType }) : c
+              )
             }
           >
             {TERRAIN_OPTIONS.map((t) => (
-              <option key={t} value={t}>{label(t)}</option>
+              <option key={t} value={t}>
+                {label(t)}
+              </option>
             ))}
           </select>
         </label>
@@ -67,14 +84,15 @@ export const EditPanel = () => {
             </span>
           </span>
           <input
-            type="range" min="0" max="100" step="5"
+            type="range"
+            min="0"
+            max="100"
+            step="5"
             value={Math.round(d.density * 100)}
             onChange={(e) =>
-              dispatch({
-                type: "UPDATE_CELL",
-                id: cell.id,
-                patch: { density: Number(e.target.value) / 100 },
-              })
+              setCity((c) =>
+                c ? updateCell(c, cell.id, { density: Number(e.target.value) / 100 }) : c
+              )
             }
             className="w-full accent-amber-700"
           />
@@ -86,11 +104,9 @@ export const EditPanel = () => {
             type="checkbox"
             checked={d.withinWalls}
             onChange={(e) =>
-              dispatch({
-                type: "UPDATE_CELL",
-                id: cell.id,
-                patch: { withinWalls: e.target.checked },
-              })
+              setCity((c) =>
+                c ? updateCell(c, cell.id, { withinWalls: e.target.checked }) : c
+              )
             }
             className="h-4 w-4 accent-amber-700"
           />
@@ -107,18 +123,22 @@ export const EditPanel = () => {
     );
   }
 
-  // ── Edge panel ─────────────────────────────────────────────────────────────
   if (selected.type === "edge") {
-    const firstEdge = mesh.edges.get(selected.id as import("../../lib/mesh").EdgeId);
+    const firstEdge = mesh.edges.get(selected.id as EdgeId);
     if (!firstEdge) return null;
-    const traceIds  = selected.traceIds ?? [selected.id as import("../../lib/mesh").EdgeId];
-    const d         = firstEdge.data;
+    const traceIds = selected.traceIds ?? [selected.id as EdgeId];
+    const d = firstEdge.data;
     const isFeature = d.feature !== "none";
 
     const updateAll = (patch: Partial<typeof d>) => {
-      for (const eid of traceIds) {
-        dispatch({ type: "UPDATE_EDGE", id: eid as import("../../lib/mesh").EdgeId, patch });
-      }
+      setCity((c) => {
+        if (!c) return c;
+        let next = c;
+        for (const eid of traceIds) {
+          next = updateEdge(next, eid, patch);
+        }
+        return next;
+      });
     };
 
     return (
@@ -140,7 +160,9 @@ export const EditPanel = () => {
             }
           >
             {EDGE_FEATURE_OPTIONS.map((f) => (
-              <option key={f} value={f}>{label(f)}</option>
+              <option key={f} value={f}>
+                {label(f)}
+              </option>
             ))}
           </select>
         </label>
@@ -149,14 +171,17 @@ export const EditPanel = () => {
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-gray-600">
               Width&nbsp;
-              <span className="font-mono text-gray-800">{d.width.toFixed(1)}</span>
+              <span className="font-mono text-gray-800">
+                {d.width.toFixed(1)}
+              </span>
             </span>
             <input
-              type="range" min="1" max="20" step="0.5"
+              type="range"
+              min="1"
+              max="20"
+              step="0.5"
               value={d.width}
-              onChange={(e) =>
-                updateAll({ width: Number(e.target.value) })
-              }
+              onChange={(e) => updateAll({ width: Number(e.target.value) })}
               className="w-full accent-amber-700"
             />
           </label>
@@ -169,9 +194,8 @@ export const EditPanel = () => {
     );
   }
 
-  // ── Vertex panel ───────────────────────────────────────────────────────────
   if (selected.type === "vertex") {
-    const vertex = mesh.vertices.get(selected.id as import("../../lib/mesh").VertexId);
+    const vertex = mesh.vertices.get(selected.id as VertexId);
     if (!vertex) return null;
     const d = vertex.data;
 
@@ -185,15 +209,15 @@ export const EditPanel = () => {
             className="rounded border border-gray-300 bg-white px-2 py-1 text-sm"
             value={d.feature}
             onChange={(e) =>
-              dispatch({
-                type: "UPDATE_VERTEX",
-                id: vertex.id,
-                patch: { feature: e.target.value as VertexFeature },
-              })
+              setCity((c) =>
+                c ? updateVertex(c, vertex.id, { feature: e.target.value as VertexFeature }) : c
+              )
             }
           >
             {VERTEX_FEATURE_OPTIONS.map((f) => (
-              <option key={f} value={f}>{label(f)}</option>
+              <option key={f} value={f}>
+                {label(f)}
+              </option>
             ))}
           </select>
         </label>
@@ -209,39 +233,3 @@ export const EditPanel = () => {
   return null;
 };
 
-// ── Edit toolbar ───────────────────────────────────────────────────────────────
-
-export const EditToolbar = () => {
-  const { state, dispatch } = useMap();
-  const { editMode, tool } = state;
-
-  const toolBtn = (t: import("../../lib/mapState").EditTool, label: string) => (
-    <button
-      key={t}
-      onClick={() => dispatch({ type: "SET_TOOL", tool: t })}
-      className={`rounded px-3 py-1 text-sm font-medium transition-colors ${
-        tool === t
-          ? "bg-amber-700 text-white"
-          : "bg-amber-100 text-amber-900 hover:bg-amber-200"
-      }`}
-    >
-      {label}
-    </button>
-  );
-
-  if (!editMode) return null;
-
-  return (
-    <div
-      className="flex items-center gap-2 rounded-b border border-t-0 border-amber-300 bg-amber-50 px-4 py-2"
-      style={{ borderColor: PALETTE.farmDark }}
-    >
-      <span className="mr-2 text-xs font-semibold uppercase tracking-wide text-amber-700">
-        Edit mode
-      </span>
-      {toolBtn("select", "Select")}
-      {toolBtn("paint",  "Paint zones")}
-      {toolBtn("vertex", "Move vertices")}
-    </div>
-  );
-};

@@ -15,7 +15,7 @@ export function signedArea(pts: Pt[]): number {
   let s = 0;
   const n = pts.length;
   for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
+    const a = pts[i]!, b = pts[(i + 1) % n]!;
     s += (a.x * b.y - b.x * a.y);
   }
   return s / 2;
@@ -59,20 +59,20 @@ export function insetPolygon(pts: Pt[], insets: number[]): Pt[] {
   const cw = signedArea(pts) < 0;
 
   // For each edge, compute the offset edge (parallel, shifted inward)
-  const offsetEdges: Array<[Pt, Pt]> = [];
+  const offsetEdges: [Pt, Pt][] = [];
   for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
+    const a = pts[i]!, b = pts[(i + 1) % n]!;
     const d   = norm(sub(b, a));
     const inw = cw ? { x: d.y, y: -d.x } : { x: -d.y, y: d.x }; // inward normal
-    const shift = scale(inw, insets[i]);
+    const shift = scale(inw, insets[i]!);
     offsetEdges.push([add(a, shift), add(b, shift)]);
   }
 
   // New vertices = intersection of consecutive offset edges
   const result: Pt[] = [];
   for (let i = 0; i < n; i++) {
-    const [a1, a2] = offsetEdges[(i + n - 1) % n];
-    const [b1, b2] = offsetEdges[i];
+    const [a1, a2] = offsetEdges[(i + n - 1) % n]!;
+    const [b1, b2] = offsetEdges[i]!;
     const p = lineIntersect(a1, a2, b1, b2);
     result.push(p ?? b1); // fallback to edge start if parallel
   }
@@ -106,9 +106,9 @@ export function cutPolygon(
   const dx = p2.x - p1.x, dy = p2.y - p1.y;
 
   // Find all intersections of the cut line with polygon edges
-  const hits: Array<{ edgeIdx: number; s: number; pt: Pt }> = [];
+  const hits: { edgeIdx: number; s: number; pt: Pt }[] = [];
   for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
+    const a = pts[i]!, b = pts[(i + 1) % n]!;
     const ex = b.x - a.x, ey = b.y - a.y;
     const denom = dx * ey - dy * ex;
     if (Math.abs(denom) < 1e-10) continue;
@@ -122,7 +122,7 @@ export function cutPolygon(
   if (hits.length < 2) return null;
   // Take the two extreme hits if more than 2 (degenerate polygons)
   hits.sort((a, b) => a.edgeIdx - b.edgeIdx || a.s - b.s);
-  const h1 = hits[0], h2 = hits[hits.length - 1];
+  const h1 = hits[0]!, h2 = hits[hits.length - 1]!;
   if (h1.edgeIdx === h2.edgeIdx) return null;
 
   const I1 = h1.pt, I2 = h2.pt;
@@ -130,12 +130,12 @@ export function cutPolygon(
 
   // Build half1: I1 → pts[e1+1..e2] → I2
   const half1: Pt[] = [I1];
-  for (let i = e1 + 1; i <= e2; i++) half1.push({ ...pts[i] });
+  for (let i = e1 + 1; i <= e2; i++) half1.push({ ...pts[i]! });
   half1.push(I2);
 
   // Build half2: I2 → pts[e2+1..n+e1] → I1
   const half2: Pt[] = [I2];
-  for (let i = e2 + 1; i <= e2 + (n - e2 + e1); i++) half2.push({ ...pts[i % n] });
+  for (let i = e2 + 1; i <= e2 + (n - e2 + e1); i++) half2.push({ ...pts[i % n]! });
   half2.push(I1);
 
   if (half1.length < 3 || half2.length < 3) return null;
@@ -189,11 +189,10 @@ export function pointInPolygon(p: Pt, pts: Pt[]): boolean {
   let inside = false;
   const n = pts.length;
   for (let i = 0, j = n - 1; i < n; j = i++) {
-    const xi = pts[i].x, yi = pts[i].y;
-    const xj = pts[j].x, yj = pts[j].y;
+    const pi = pts[i]!, pj = pts[j]!;
     const intersect =
-      yi > p.y !== yj > p.y &&
-      p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi;
+      pi.y > p.y !== pj.y > p.y &&
+      p.x < ((pj.x - pi.x) * (p.y - pi.y)) / (pj.y - pi.y) + pi.x;
     if (intersect) inside = !inside;
   }
   return inside;

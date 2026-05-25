@@ -5,8 +5,8 @@ import { CLEARANCE, type EdgeData } from "./terrain";
 // ── Branded IDs ───────────────────────────────────────────────────────────────
 
 export type VertexId = string & { readonly __brand: "VertexId" };
-export type EdgeId   = string & { readonly __brand: "EdgeId" };
-export type CellId   = string & { readonly __brand: "CellId" };
+export type EdgeId = string & { readonly __brand: "EdgeId" };
+export type CellId = string & { readonly __brand: "CellId" };
 
 // ── Core element types ────────────────────────────────────────────────────────
 
@@ -27,42 +27,46 @@ export interface Edge<E = unknown> {
 export interface Cell<C = unknown> {
   id: CellId;
   vertexIds: VertexId[]; // ordered polygon ring
-  siteX: number;         // original Voronoi seed x
-  siteY: number;         // original Voronoi seed y
+  siteX: number; // original Voronoi seed x
+  siteY: number; // original Voronoi seed y
   data: C;
 }
 
 // ── Adjacency index (computed once, kept in sync on vertex moves) ─────────────
 
 export interface MeshIndex {
-  cellEdges:   Map<CellId,   EdgeId[]>;   // edges bounding each cell (ordered)
-  edgeCells:   Map<EdgeId,   CellId[]>;   // 1 or 2 cells per edge
-  vertexEdges: Map<VertexId, EdgeId[]>;   // edges meeting at vertex
-  vertexCells: Map<VertexId, CellId[]>;   // cells meeting at vertex
+  cellEdges: Map<CellId, EdgeId[]>; // edges bounding each cell (ordered)
+  edgeCells: Map<EdgeId, CellId[]>; // 1 or 2 cells per edge
+  vertexEdges: Map<VertexId, EdgeId[]>; // edges meeting at vertex
+  vertexCells: Map<VertexId, CellId[]>; // cells meeting at vertex
 }
 
 // ── Mesh ──────────────────────────────────────────────────────────────────────
 
 export interface Mesh<V = unknown, E = unknown, C = unknown> {
   vertices: Map<VertexId, Vertex<V>>;
-  edges:    Map<EdgeId,   Edge<E>>;
-  cells:    Map<CellId,   Cell<C>>;
-  index:    MeshIndex;
+  edges: Map<EdgeId, Edge<E>>;
+  cells: Map<CellId, Cell<C>>;
+  index: MeshIndex;
 }
 
 // ── Builder ───────────────────────────────────────────────────────────────────
 
 export function meshFromPoints<V, E, C>(
-  sites: Array<{ x: number; y: number }>,
+  sites: { x: number; y: number }[],
   bounds: [number, number, number, number],
   defaults: { vertex: V; edge: E; cell: C }
 ): Mesh<V, E, C> {
-  const delaunay = Delaunay.from(sites, (p) => p.x, (p) => p.y);
-  const voronoi  = delaunay.voronoi(bounds);
+  const delaunay = Delaunay.from(
+    sites,
+    (p) => p.x,
+    (p) => p.y
+  );
+  const voronoi = delaunay.voronoi(bounds);
 
   const vertices = new Map<VertexId, Vertex<V>>();
-  const edges    = new Map<EdgeId,   Edge<E>>();
-  const cells    = new Map<CellId,   Cell<C>>();
+  const edges = new Map<EdgeId, Edge<E>>();
+  const cells = new Map<CellId, Cell<C>>();
 
   const posKey = (x: number, y: number) => `${x.toFixed(3)},${y.toFixed(3)}`;
   const vertexByPos = new Map<string, VertexId>();
@@ -97,8 +101,8 @@ export function meshFromPoints<V, E, C>(
     });
 
     for (let j = 0; j < vIds.length; j++) {
-      const a = vIds[j];
-      const b = vIds[(j + 1) % vIds.length];
+      const a = vIds[j]!;
+      const b = vIds[(j + 1) % vIds.length]!;
       const k = edgeKey(a, b);
       if (!edgeByKey.has(k)) {
         const eid = `e${edges.size}` as EdgeId;
@@ -113,12 +117,12 @@ export function meshFromPoints<V, E, C>(
 
 // ── Index ─────────────────────────────────────────────────────────────────────
 
-export function buildIndex<V, E, C>(
+export function buildIndex<E, C>(
   cells: Map<CellId, Cell<C>>,
   edges: Map<EdgeId, Edge<E>>
 ): MeshIndex {
-  const cellEdges   = new Map<CellId,   EdgeId[]>();
-  const edgeCells   = new Map<EdgeId,   CellId[]>();
+  const cellEdges = new Map<CellId, EdgeId[]>();
+  const edgeCells = new Map<EdgeId, CellId[]>();
   const vertexEdges = new Map<VertexId, EdgeId[]>();
   const vertexCells = new Map<VertexId, CellId[]>();
 
@@ -132,8 +136,8 @@ export function buildIndex<V, E, C>(
     const cEdges: EdgeId[] = [];
 
     for (let j = 0; j < vIds.length; j++) {
-      const a = vIds[j];
-      const b = vIds[(j + 1) % vIds.length];
+      const a = vIds[j]!;
+      const b = vIds[(j + 1) % vIds.length]!;
       const eid = keyToEdge.get(edgeKey(a, b));
       if (eid) {
         cEdges.push(eid);
@@ -163,19 +167,32 @@ export function buildIndex<V, E, C>(
 
 // ── Mutations ─────────────────────────────────────────────────────────────────
 
-export function moveVertex(mesh: Mesh, id: VertexId, x: number, y: number): void {
+export function moveVertex(
+  mesh: Mesh,
+  id: VertexId,
+  x: number,
+  y: number
+): void {
   const v = mesh.vertices.get(id);
-  if (v) { v.x = x; v.y = y; }
+  if (v) {
+    v.x = x;
+    v.y = y;
+  }
 }
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
 
 /** Returns the centroid of a cell polygon. */
-export function cellCentroid<C>(cell: Cell<C>, vertices: Map<VertexId, Vertex<unknown>>): { x: number; y: number } {
-  let sx = 0, sy = 0;
+export function cellCentroid<C>(
+  cell: Cell<C>,
+  vertices: Map<VertexId, Vertex<unknown>>
+): { x: number; y: number } {
+  let sx = 0,
+    sy = 0;
   for (const vid of cell.vertexIds) {
     const v = vertices.get(vid)!;
-    sx += v.x; sy += v.y;
+    sx += v.x;
+    sy += v.y;
   }
   return { x: sx / cell.vertexIds.length, y: sy / cell.vertexIds.length };
 }
@@ -186,8 +203,8 @@ export function dist(ax: number, ay: number, bx: number, by: number): number {
 }
 
 /**
- * Returns the cell whose site is closest to (x, y).
- * Used to seed terrain assignment by radius.
+ * Returns the cell whose site is closest to (x, y). Used to seed terrain
+ * assignment by radius.
  */
 export function closestCell<V, E, C>(
   mesh: Mesh<V, E, C>,
@@ -198,7 +215,10 @@ export function closestCell<V, E, C>(
   let bestD = Infinity;
   for (const cell of mesh.cells.values()) {
     const d = dist(x, y, cell.siteX, cell.siteY);
-    if (d < bestD) { bestD = d; best = cell.id; }
+    if (d < bestD) {
+      bestD = d;
+      best = cell.id;
+    }
   }
   return best;
 }
@@ -237,8 +257,8 @@ export function traceFeature<V, E extends { feature: string }, C>(
 }
 
 /**
- * Computes the inset polygon for a cell based on adjacent edge features.
- * Edges that border a road/river/wall are shrunk inward by the CLEARANCE amount.
+ * Computes the inset polygon for a cell based on adjacent edge features. Edges
+ * that border a road/river/wall are shrunk inward by the CLEARANCE amount.
  * Returns an array of {x,y} points defining the inset polygon.
  */
 export function computeCellInset<V, C>(
@@ -246,14 +266,15 @@ export function computeCellInset<V, C>(
   mesh: Mesh<V, EdgeData, C>
 ): Pt[] {
   const vIds = cell.vertexIds;
-  const n    = vIds.length;
-  const pts  = vIds.map((id) => {
+  const n = vIds.length;
+  const pts = vIds.map((id) => {
     const v = mesh.vertices.get(id)!;
-    return { x: v.x, y: v.y } as Pt;
+    return { x: v.x, y: v.y };
   });
 
   // For each edge i→(i+1), find its clearance
-  const edgeKey = (a: VertexId, b: VertexId) => a < b ? `${a}|${b}` : `${b}|${a}`;
+  const edgeKey = (a: VertexId, b: VertexId) =>
+    a < b ? `${a}|${b}` : `${b}|${a}`;
   const keyToEdge = new Map<string, EdgeData>();
   for (const e of mesh.edges.values()) {
     keyToEdge.set(edgeKey(e.a, e.b), e.data);
@@ -261,7 +282,8 @@ export function computeCellInset<V, C>(
 
   const insets: number[] = [];
   for (let i = 0; i < n; i++) {
-    const a = vIds[i], b = vIds[(i + 1) % n];
+    const a = vIds[i]!,
+      b = vIds[(i + 1) % n]!;
     const edata = keyToEdge.get(edgeKey(a, b));
     insets.push(edata ? CLEARANCE[edata.feature] : 0);
   }

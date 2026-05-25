@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { useMap } from "../../contexts/MapContext";
 import { PALETTE, type ZoneType, type TerrainType } from "../../lib/terrain";
+import type { CityMap } from "../../types/CityMap";
+import { createZone, deleteZone, updateZoneRecord } from "../../lib/cityMutations";
 
 const ZONE_TYPE_OPTIONS: { value: ZoneType; label: string; terrain: TerrainType; color: string }[] = [
   { value: "ocean",    label: "Ocean",       terrain: "water",  color: PALETTE.water     },
@@ -18,9 +20,15 @@ const ZONE_TYPE_ICON: Record<ZoneType, string> = {
   city:     "▦",
 };
 
-export const ZonePanel = () => {
+interface ZonePanelProps {
+  city:    CityMap;
+  setCity: Dispatch<SetStateAction<CityMap | null>>;
+}
+
+export const ZonePanel = ({ city, setCity }: ZonePanelProps) => {
   const { state, dispatch } = useMap();
-  const { city: { zones, mesh }, activeZoneId, paintMode } = state;
+  const { activeZoneId, paintMode } = state;
+  const { zones } = city;
   const [newZoneName, setNewZoneName] = useState("");
   const [newZoneType, setNewZoneType] = useState<ZoneType>("city");
   const [creating, setCreating] = useState(false);
@@ -29,14 +37,19 @@ export const ZonePanel = () => {
 
   const handleCreate = () => {
     if (!newZoneName.trim()) return;
-    const typeInfo = ZONE_TYPE_OPTIONS.find((t) => t.value === newZoneType)!;
-    dispatch({
-      type: "CREATE_ZONE",
-      name: newZoneName.trim(),
-      zoneType: newZoneType,
-      terrain: typeInfo.terrain,
-      density: newZoneType === "city" ? 0.6 : 0.4,
+    let newId: string | null = null;
+    setCity((c) => {
+      if (!c) return c;
+      const result = createZone(
+        c,
+        newZoneName.trim(),
+        newZoneType,
+        newZoneType === "city" ? 0.6 : 0.4
+      );
+      newId = result.zoneId;
+      return result.city;
     });
+    if (newId) dispatch({ type: "SET_ACTIVE_ZONE", zoneId: newId });
     setNewZoneName("");
     setCreating(false);
   };
@@ -45,7 +58,6 @@ export const ZonePanel = () => {
 
   return (
     <div className="flex h-full flex-col gap-0">
-      {/* Paint mode toggle */}
       <div className="border-b border-gray-100 px-4 py-3">
         <div className="flex gap-2">
           <button
@@ -71,7 +83,6 @@ export const ZonePanel = () => {
         </div>
       </div>
 
-      {/* Active zone info */}
       {activeZone && (
         <div
           className="mx-3 mt-3 rounded-lg border px-3 py-2 text-sm"
@@ -96,7 +107,6 @@ export const ZonePanel = () => {
         </div>
       )}
 
-      {/* Zone list */}
       <div className="flex-1 overflow-y-auto px-3 py-2">
         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
           Zones
@@ -128,7 +138,10 @@ export const ZonePanel = () => {
                   className="ml-1 hidden text-xs text-gray-400 hover:text-red-500 group-hover:block"
                   onClick={(e) => {
                     e.stopPropagation();
-                    dispatch({ type: "DELETE_ZONE", zoneId: zone.id });
+                    setCity((c) => (c ? deleteZone(c, zone.id) : c));
+                    if (activeZoneId === zone.id) {
+                      dispatch({ type: "SET_ACTIVE_ZONE", zoneId: null });
+                    }
                   }}
                 >
                   ×
@@ -139,7 +152,6 @@ export const ZonePanel = () => {
         </div>
       </div>
 
-      {/* Zone density editing when active zone selected */}
       {activeZone && (
         <div className="border-t border-gray-100 px-4 py-3">
           <label className="flex flex-col gap-1 text-xs">
@@ -153,11 +165,9 @@ export const ZonePanel = () => {
               type="range" min="0" max="100" step="5"
               value={Math.round(activeZone.density * 100)}
               onChange={(e) =>
-                dispatch({
-                  type: "UPDATE_ZONE",
-                  zoneId: activeZoneId!,
-                  patch: { density: Number(e.target.value) / 100 },
-                })
+                setCity((c) =>
+                  c ? updateZoneRecord(c, activeZoneId!, { density: Number(e.target.value) / 100 }) : c
+                )
               }
               className="accent-amber-700"
             />
@@ -170,11 +180,9 @@ export const ZonePanel = () => {
                 type="text"
                 value={activeZone.name}
                 onChange={(e) =>
-                  dispatch({
-                    type: "UPDATE_ZONE",
-                    zoneId: activeZoneId!,
-                    patch: { name: e.target.value },
-                  })
+                  setCity((c) =>
+                    c ? updateZoneRecord(c, activeZoneId!, { name: e.target.value }) : c
+                  )
                 }
                 className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-800 focus:border-amber-500 focus:outline-none"
               />
@@ -183,7 +191,6 @@ export const ZonePanel = () => {
         </div>
       )}
 
-      {/* Create new zone */}
       <div className="border-t border-gray-100 px-3 py-3">
         {creating ? (
           <div className="flex flex-col gap-2">

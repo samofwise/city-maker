@@ -1,29 +1,41 @@
-import { useCallback, useMemo, useRef, type PointerEvent } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  type Dispatch,
+  type PointerEvent,
+  type SetStateAction,
+} from "react";
 import { traceFeature, type CellId, type EdgeId, type VertexId } from "../../lib/mesh";
 import { CellPolygon, EdgeLine } from "./CellLayer";
 import { useMap } from "../../contexts/MapContext";
-import { PALETTE, type VertexData } from "../../lib/terrain";
+import { useEditing } from "../../contexts/EditingContext";
+import { PALETTE } from "../../lib/terrain";
+import type { CityMap } from "../../types/CityMap";
+import { moveVertex, paintCell as paintCellMut, unpaintCell } from "../../lib/cityMutations";
 
-export const WIDTH  = 800;
-export const HEIGHT = 600;
+interface MeshViewProps {
+  city:    CityMap;
+  setCity: Dispatch<SetStateAction<CityMap | null>>;
+}
 
-// ── Component ──────────────────────────────────────────────────────────────────
-
-export const MeshView = () => {
+export const MeshView = ({ city, setCity }: MeshViewProps) => {
   const { state, dispatch } = useMap();
-  const { city: { mesh }, editMode, tool, hovered, selected } = state;
+  const { hovered, selected, activeZoneId, paintMode } = state;
+  const { isEditing: editMode, currentTool: tool } = useEditing();
+  const { mesh, width, height } = city;
 
-  const draggingRef  = useRef<VertexId | null>(null);
-  const paintingRef  = useRef(false);
-  const svgRef       = useRef<SVGSVGElement>(null);
+  const draggingRef = useRef<VertexId | null>(null);
+  const paintingRef = useRef(false);
+  const svgRef      = useRef<SVGSVGElement>(null);
 
   const toSvgPoint = (e: PointerEvent<SVGElement>) => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.min(WIDTH,  ((e.clientX - rect.left) / rect.width)  * WIDTH)),
-      y: Math.max(0, Math.min(HEIGHT, ((e.clientY - rect.top)  / rect.height) * HEIGHT)),
+      x: Math.max(0, Math.min(width,  ((e.clientX - rect.left) / rect.width)  * width)),
+      y: Math.max(0, Math.min(height, ((e.clientY - rect.top)  / rect.height) * height)),
     };
   };
 
@@ -31,13 +43,12 @@ export const MeshView = () => {
 
   const paintCell = useCallback((id: CellId) => {
     if (!editMode || tool !== "paint") return;
-    const { activeZoneId, paintMode } = state;
     if (paintMode === "remove") {
-      dispatch({ type: "UNPAINT_CELL", id });
+      setCity((c) => (c ? unpaintCell(c, id) : c));
     } else if (activeZoneId) {
-      dispatch({ type: "PAINT_CELL", id, zoneId: activeZoneId });
+      setCity((c) => (c ? paintCellMut(c, id, activeZoneId) : c));
     }
-  }, [editMode, tool, state, dispatch]);
+  }, [editMode, tool, paintMode, activeZoneId, setCity]);
 
   // ── Hover helpers ──────────────────────────────────────────────────────────
 
@@ -94,22 +105,19 @@ export const MeshView = () => {
   }, [editMode, tool]);
 
   const onSvgPointerMove = useCallback((e: PointerEvent<SVGSVGElement>) => {
-    if (!draggingRef.current) return;
+    const id = draggingRef.current;
+    if (!id) return;
     const { x, y } = toSvgPoint(e);
-    dispatch({ type: "MOVE_VERTEX", id: draggingRef.current, x, y });
+    setCity((c) => (c ? moveVertex(c, id, x, y) : c));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatch]);
+  }, [setCity]);
 
   const onSvgPointerUp = useCallback(() => {
     draggingRef.current = null;
     paintingRef.current = false;
   }, []);
 
-  // ── Stable vertex position accessor ───────────────────────────────────────
-
   const vpt = useCallback((id: VertexId) => mesh.vertices.get(id)!, [mesh]);
-
-  // ── Per-cell points strings (stable keys → React.memo skips unaffected) ───
 
   const cellPoints = useMemo(
     () =>
@@ -122,8 +130,6 @@ export const MeshView = () => {
     [mesh, vpt]
   );
 
-  // ── Highlighted edge sets ──────────────────────────────────────────────────
-
   const hoveredEdgeIds = useMemo(
     () => new Set(hovered?.type === "edge" ? (hovered.traceIds ?? [hovered.id as EdgeId]) : []),
     [hovered]
@@ -132,8 +138,6 @@ export const MeshView = () => {
     () => new Set(selected?.type === "edge" ? (selected.traceIds ?? [selected.id as EdgeId]) : []),
     [selected]
   );
-
-  // ── Vertex drag highlight: cells/edges adjacent to dragged vertex ──────────
 
   const dragVertex = draggingRef.current;
   const dragHighlightCells = useMemo(() => {
@@ -146,15 +150,14 @@ export const MeshView = () => {
   return (
     <svg
       ref={svgRef}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="w-full max-w-4xl touch-none rounded border border-gray-300"
-      style={{ background: PALETTE.paper }}
+      viewBox={`0 0 ${width} ${height}`}
+      className="touch-none rounded border border-gray-300"
+      style={{ width, height, background: PALETTE.paper }}
       onPointerMove={onSvgPointerMove}
       onPointerUp={onSvgPointerUp}
       onPointerCancel={onSvgPointerUp}
       onPointerLeave={clearHover}
     >
-      {/* ── Cells (memoised — only affected cells re-render on vertex drag) ── */}
       {[...mesh.cells.values()].map((c) => {
         const isHovered  = hovered?.type === "cell" && hovered.id === c.id;
         const isSelected = selected?.type === "cell" && selected.id === c.id;
@@ -175,7 +178,6 @@ export const MeshView = () => {
         );
       })}
 
-      {/* ── Edges (rivers first, then roads, then walls) ─────────────────── */}
       {[...mesh.edges.values()]
         .filter((e) => e.data.feature !== "none")
         .sort((a, b) => {
@@ -201,7 +203,6 @@ export const MeshView = () => {
           );
         })}
 
-      {/* ── Vertex features (gates, bridges, towers) ─────────────────────── */}
       {[...mesh.vertices.values()]
         .filter((v) => v.data.feature !== "none")
         .map((v) => {
@@ -220,7 +221,6 @@ export const MeshView = () => {
                     stroke="white" strokeWidth={1} />
                 </>
               )}
-              {/* Vertex selection overlay */}
               {editMode && tool === "select" && (
                 <circle cx={v.x} cy={v.y} r={12}
                   fill={selected?.type === "vertex" && selected.id === v.id ? PALETTE.selected : "transparent"}
@@ -236,10 +236,8 @@ export const MeshView = () => {
           );
         })}
 
-      {/* ── Vertex drag handles (vertex tool) ────────────────────────────── */}
       {editMode && tool === "vertex" && (
         <g>
-          {/* Guide lines from dragged vertex to its neighbours */}
           {draggingRef.current &&
             (mesh.index.vertexEdges.get(draggingRef.current) ?? []).map((eid) => {
               const e  = mesh.edges.get(eid)!;
@@ -256,18 +254,16 @@ export const MeshView = () => {
           {[...mesh.vertices.values()].map((v) => {
             const isDragging = draggingRef.current === v.id;
             const isHov      = hovered?.type === "vertex" && hovered.id === v.id;
-            const feat       = v.data.feature as VertexData["feature"];
+            const feat       = v.data.feature;
             const hasFeat    = feat !== "none";
             return (
               <g key={`vh-${v.id}`}>
-                {/* Feature symbol background (so it's visible through the handle) */}
                 {hasFeat && (
                   <circle cx={v.x} cy={v.y} r={isDragging ? 9 : 6}
                     fill={PALETTE.wallFill} stroke={PALETTE.wallStroke} strokeWidth={1}
                     pointerEvents="none"
                   />
                 )}
-                {/* Drag handle */}
                 <circle
                   cx={v.x} cy={v.y}
                   r={isDragging ? 8 : isHov ? 6 : 4.5}
@@ -283,7 +279,6 @@ export const MeshView = () => {
             );
           })}
 
-          {/* Live coordinate tooltip for dragged vertex */}
           {draggingRef.current && (() => {
             const v = vpt(draggingRef.current);
             return (

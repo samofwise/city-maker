@@ -6,8 +6,8 @@
  */
 
 import {
-  add, sub, norm, scale, perp, dot,
-  polyArea, interpolatePt, centroid, cutPolygon,
+  add, sub, norm, scale, perp,
+  polyArea, interpolatePt, cutPolygon,
   type Pt,
 } from "./geometry";
 
@@ -27,7 +27,7 @@ export interface WardConfig {
 // Pre-tuned configs matching the source ward types.
 // Scale: TownGeneratorOS used ~200-unit cities; we use 800x600 (≈4× bigger),
 // so minSq is scaled up by ~16×.
-export const WARD_CONFIGS: Record<string, WardConfig> = {
+export const WARD_CONFIGS = {
   // Very small, chaotic, dense — lots of tiny buildings crammed together
   slum: { minSq: 200,  gridChaos: 0.8, sizeChaos: 0.8, emptyProb: 0.03 },
   // Moderate size, semi-regular — tradespeople and craftsmen
@@ -36,7 +36,7 @@ export const WARD_CONFIGS: Record<string, WardConfig> = {
   patriciate: { minSq: 700,  gridChaos: 0.55, sizeChaos: 0.8,  emptyProb: 0.20 },
   // Central plaza / market — very large, very sparse
   market: { minSq: 1800, gridChaos: 0.3,  sizeChaos: 0.5,  emptyProb: 0.40 },
-};
+} satisfies Record<string, WardConfig>;
 
 // ── ALLEY width (gap inserted at each recursive cut) ─────────────────────────
 // TownGeneratorOS ALLEY = 0.6 in their coords; we scale up to match our SVG space.
@@ -77,13 +77,13 @@ export function createAlleyBuildings(
   let longestLen = -1;
   let longestIdx = 0;
   for (let i = 0; i < poly.length; i++) {
-    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const a = poly[i]!, b = poly[(i + 1) % poly.length]!;
     const d = Math.hypot(b.x - a.x, b.y - a.y);
     if (d > longestLen) { longestLen = d; longestIdx = i; }
   }
 
-  const vertex = poly[longestIdx];
-  const next   = poly[(longestIdx + 1) % poly.length];
+  const vertex = poly[longestIdx]!;
+  const next   = poly[(longestIdx + 1) % poly.length]!;
 
   // Position along the edge (ratio ≈ 0.5 ± 0.4*chaos)
   const spread = 0.8 * cfg.gridChaos;

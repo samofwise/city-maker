@@ -5,14 +5,9 @@ import {
   type ReactNode,
   type Dispatch,
 } from "react";
-import { generateCity } from "../lib/generate";
 import { mapReducer, type MapState, type MapAction } from "../lib/mapState";
-import { WIDTH, HEIGHT } from "../components/organisms/MeshView";
 
 const initialState: MapState = {
-  city:         generateCity(WIDTH, HEIGHT, 42),
-  editMode:     false,
-  tool:         "select",
   hovered:      null,
   selected:     null,
   activeZoneId: null,

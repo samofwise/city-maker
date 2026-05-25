@@ -1,13 +1,11 @@
 {
   "extends": "@samhenrytech/eslint-config/tsconfig.base.json",
   "compilerOptions": {
-    /* Path aliases */
-    "baseUrl": ".",
     "paths": {
       "~/*": ["./src/*"]
     },
     "types": ["node"]
   },
-  "include": ["**/*", "**/.*"],
+  "include": ["src/**/*", "src/**/.*", "*.ts", "*.tsx", ".prettierrc.ts"],
   "exclude": ["node_modules", "dist"]
 }
