@@ -7,6 +7,7 @@ import {
   lloydRelax,
   meshFromPoints,
   optimizeJunctions,
+  smoothPatchBoundary,
   type CellId,
 } from "./mesh";
 import { mulberry32 } from "./randomnessHelper";
@@ -62,50 +63,21 @@ export const generateCity = (
   const TOTAL_CELLS = COMPLEXITY_MAP[COMPLEXITY];
   const bounds: [number, number, number, number] = [0, 0, width, height];
 
+  // Number of Laplacian smoothing passes applied to the city boundary.
+  // 0 = raw Voronoi edges (jagged), higher = rounder silhouette.
+  // Each pass runs weighted-average smoothing: new_v = (prev + f·v + next)/(2+f)
+  const CITY_BOUNDARY_SMOOTHING = 4;
+
   const rawSites = spiralSites(TOTAL_CELLS, cx, cy, maxR, rng);
 
-  // Pass 1: global Lloyd relax — evens out the spiral so cell areas are uniform
-  // and the Voronoi has well-formed neighbour structure throughout.
-  let sites = lloydRelax(rawSites, bounds, 7);
+  // Global Lloyd relax — evens out the spiral so cell areas are roughly
+  // uniform. TownGeneratorOS does 3 iterations on the central CELL_COUNT sites
+  // (Model.hx:120-128); we relax everything so the outer cushion is also
+  // regular, which slightly helps the city boundary too.
+  const sites = lloydRelax(rawSites, bounds, 7);
 
-  // Identify which site indices will become city cells (plaza + inner + mid
-  // rings) by distance from center on the relaxed positions. We pre-compute
-  // this BEFORE building the mesh so we can target a second Lloyd pass at
-  // just these sites, which evens out the city patches and pulls the city
-  // boundary toward a smooth, near-circular shape (TownGeneratorOS achieves
-  // similar smoothness by spiral-seeding + relaxation; a targeted pass tightens
-  // it further along the wall line, which is the part the user sees).
   const innerCount = Math.floor(TOTAL_CELLS * 0.1);
   const midCount = Math.floor(TOTAL_CELLS * 0.21);
-  const cityCellCount = 1 + innerCount + midCount;
-
-  const indicesByDist = Array.from({ length: TOTAL_CELLS }, (_, i) => i).sort(
-    (a, b) =>
-      dist(sites[a]!.x, sites[a]!.y, cx, cy) -
-      dist(sites[b]!.x, sites[b]!.y, cx, cy)
-  );
-  const cityIndices = indicesByDist.slice(0, cityCellCount);
-
-  // Pass 2: targeted Lloyd relax on city sites + immediate transition ring.
-  // Relaxing the ring just outside the city too removes the irregular outer
-  // neighbours that were forcing city boundary cells into spiky shapes — the
-  // ring acts like a smooth "cushion" the city packs against. Iterations are
-  // higher than the global pass because we want the city patch outline to
-  // converge to a near-circular shape (TownGeneratorOS achieves smooth city
-  // boundaries via spiral-seeding + heavy relaxation in `Model.hx:99-129`;
-  // applying a second focused pass tightens it further).
-  const cityPlusRingCount = Math.min(
-    TOTAL_CELLS,
-    Math.floor(cityCellCount * 1.6)
-  );
-  const cityPlusRingIndices = indicesByDist.slice(0, cityPlusRingCount);
-  sites = lloydRelax(sites, bounds, 6, cityPlusRingIndices);
-
-  // Pass 3: a final tight relax on just the city sites — now that they sit
-  // inside a regularised neighbourhood the centroids land closer to the
-  // geometric center of each cell, producing more equiangular city patches
-  // and a smoother wall ring.
-  sites = lloydRelax(sites, bounds, 12, cityIndices);
 
   const mesh = meshFromPoints<VertexData, EdgeData, CellData>(sites, bounds, {
     vertex: { ...DEFAULT_VERTEX_DATA },
@@ -136,16 +108,38 @@ export const generateCity = (
   // Closest cell = plaza/market
   const plazaId = sorted[0]!.id;
 
-  // ── Coastline ocean mask ──────────────────────────────────────────────────
-  // Project each cell's position (relative to center) onto the coastline
-  // direction. Cells past the cutoff become ocean. With `separatedFromCity`
-  // the cutoff sits outside the wall ring (ocean is purely beyond the city).
-  // Without it, the cutoff reaches into the inner rings so the coast nibbles
-  // into the city — making it read as a coastal town.
   const innerMaxRadius = cellDist.get(sorted[innerCount]!.id) ?? maxR * 0.45;
   const midMaxRadius =
     cellDist.get(sorted[innerCount + midCount]!.id) ?? maxR * 0.6;
 
+  // ── Step A: classify city cells (ignoring ocean for now) ─────────────────
+  // We classify the full city ring first so the boundary smoother sees the
+  // complete circular city silhouette. The ocean mask is applied AFTER
+  // smoothing so it carves into an already-round city shape — the coast then
+  // reads as "cutting off" a naturally round city rather than as one that was
+  // always jagged on the water side.
+  const allCityIds = new Set(
+    sorted.slice(0, innerCount + 1).map((c) => c.id)
+  );
+  const allMidIds = new Set(
+    sorted.slice(innerCount + 1, innerCount + midCount + 1).map((c) => c.id)
+  );
+
+  // ── Step B: smooth the city silhouette ───────────────────────────────────
+  // Direct port of TownGeneratorOS `CurtainWall` + `Polygon.smoothVertex`
+  // (CurtainWall.hx:22-42, Polygon.hx:144-151). Walks the closed outer
+  // boundary loop and replaces each vertex v with
+  //   (prev + f·v + next) / (2 + f)
+  // where f=0.6. Adjacent outer cells share the same vertex objects so they
+  // absorb the smoothed boundary automatically (same as TownGen's by-reference
+  // Point sharing between patches).
+  const preSmoothInnerSet = new Set([plazaId, ...allCityIds, ...allMidIds]);
+  smoothPatchBoundary(mesh, preSmoothInnerSet, CITY_BOUNDARY_SMOOTHING, 0.6);
+
+  // ── Step C: apply the ocean mask AFTER smoothing ──────────────────────────
+  // Projecting onto the coastline direction now cuts into the already-smooth
+  // city, so the coast reads as the sea eating into a round city rather than
+  // the city having always been jagged on the water side.
   const oceanIds = new Set<CellId>();
   if (config.coastline) {
     const dirVec = DIRECTION_VECTORS[config.coastline.direction];
@@ -161,29 +155,15 @@ export const generateCity = (
     oceanIds.delete(plazaId); // plaza always survives
   }
 
-  // 2nd–5th ring = city core (ocean cells removed so the coast eats inward)
-  const cityIds = new Set(
-    sorted
-      .slice(0, innerCount + 1)
-      .filter((c) => !oceanIds.has(c.id))
-      .map((c) => c.id)
-  );
-  // Next ring = mixed city/park
-  const midIds = new Set(
-    sorted
-      .slice(innerCount + 1, innerCount + midCount + 1)
-      .filter((c) => !oceanIds.has(c.id))
-      .map((c) => c.id)
-  );
+  // Final city/mid sets with ocean cells removed.
+  const cityIds = new Set([...allCityIds].filter((id) => !oceanIds.has(id)));
+  const midIds = new Set([...allMidIds].filter((id) => !oceanIds.has(id)));
   // Outer cells: farm / forest based on random
   const outerIds = sorted
     .slice(innerCount + midCount + 1)
     .filter((c) => !oceanIds.has(c.id));
 
   // ── Forest direction mask ─────────────────────────────────────────────────
-  // Same projection trick as the coast, but forests never override city/mid
-  // or ocean. `separatedFromCity` pushes the cutoff further out so there is
-  // a wider grass collar between the city wall and the tree line.
   const forestIds = new Set<CellId>();
   if (config.forest) {
     const dirVec = DIRECTION_VECTORS[config.forest.direction];
@@ -193,8 +173,8 @@ export const generateCity = (
     for (const c of mesh.cells.values()) {
       if (
         c.id === plazaId ||
-        cityIds.has(c.id) ||
-        midIds.has(c.id) ||
+        allCityIds.has(c.id) ||
+        allMidIds.has(c.id) ||
         oceanIds.has(c.id)
       )
         continue;
@@ -206,26 +186,15 @@ export const generateCity = (
   }
 
   // Furthest cells = water (border)
-  // const waterCutoff =
-  //   dist(
-  //     sorted[sorted.length - 1]!.siteX,
-  //     sorted[sorted.length - 1]!.siteY,
-  //     cx,
-  //     cy
-  //   ) * 0.82;
-  // const waterIds = new Set(
-  //   outerIds
-  //     .filter((c) => (cellDist.get(c.id) ?? 0) > waterCutoff)
-  //     .map((c) => c.id)
-  // );
+  // const waterCutoff = ...
+  // const waterIds = ...;
 
   // ── 3. Assign terrain ─────────────────────────────────────────────────────
   // Density gradient inside the walls: dense at the plaza, looser as you
   // approach the city edge. The plaza itself is a low-density "open square"
   // so the buildingGen leaves room for it to read as a public space.
-  const innerSet = new Set([plazaId, ...cityIds, ...midIds]);
   const innerMaxDist = Math.max(
-    ...[...innerSet].map((id) => cellDist.get(id) ?? 0)
+    ...[...preSmoothInnerSet].map((id) => cellDist.get(id) ?? 0)
   );
 
   // Plaza is rendered TownGen-style: a single Market patch with a centroid

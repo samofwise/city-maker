@@ -263,6 +263,115 @@ export function pruneMesh<V, E, C>(
   mesh.index = buildIndex(mesh.cells, mesh.edges);
 }
 
+// ── Patch boundary smoothing (TownGeneratorOS CurtainWall + smoothVertex) ────
+
+/**
+ * Find the closed loops of edges that form the outer boundary of `innerCells`.
+ * An edge is on the boundary iff exactly one of its adjacent cells is in
+ * `innerCells`. Returns each loop as an ordered list of vertex IDs.
+ *
+ * Port of TownGen `Model.findCircumference` (Model.hx:172-203) — but generalised
+ * to return *all* loops in case the inner region is disconnected (e.g. cut by a
+ * coastline).
+ */
+export function findBoundaryLoops<V, E, C>(
+  mesh: Mesh<V, E, C>,
+  innerCells: Set<CellId>
+): VertexId[][] {
+  const boundaryEdges = new Set<EdgeId>();
+  for (const [eid] of mesh.edges) {
+    const adj = mesh.index.edgeCells.get(eid) ?? [];
+    let n = 0;
+    for (const c of adj) if (innerCells.has(c)) n++;
+    if (n === 1) boundaryEdges.add(eid);
+  }
+
+  const vertexToBdry = new Map<VertexId, EdgeId[]>();
+  for (const eid of boundaryEdges) {
+    const e = mesh.edges.get(eid)!;
+    for (const v of [e.a, e.b]) {
+      const list = vertexToBdry.get(v) ?? [];
+      list.push(eid);
+      vertexToBdry.set(v, list);
+    }
+  }
+
+  const loops: VertexId[][] = [];
+  const used = new Set<EdgeId>();
+  for (const startEdge of boundaryEdges) {
+    if (used.has(startEdge)) continue;
+    const start = mesh.edges.get(startEdge)!;
+    const loop: VertexId[] = [];
+    let prevEdge: EdgeId = startEdge;
+    let currV: VertexId = start.b;
+    loop.push(start.a);
+    used.add(startEdge);
+    let guard = 0;
+    while (currV !== start.a && guard++ < boundaryEdges.size * 2) {
+      loop.push(currV);
+      const adj = vertexToBdry.get(currV) ?? [];
+      const nextEdge = adj.find((e) => e !== prevEdge && !used.has(e));
+      if (!nextEdge) break;
+      used.add(nextEdge);
+      const e = mesh.edges.get(nextEdge)!;
+      currV = e.a === currV ? e.b : e.a;
+      prevEdge = nextEdge;
+    }
+    if (loop.length >= 3) loops.push(loop);
+  }
+  return loops;
+}
+
+/**
+ * TownGeneratorOS `Polygon.smoothVertex` weighted-Laplacian rounding pass over
+ * the boundary loops of `innerCells`. Each vertex `v` (with neighbours `p`, `n`
+ * in the loop) is moved to `(p + f·v + n) / (2 + f)` with `f = min(1, 40/N)`
+ * by default (matches CurtainWall.hx:22-42). One pass at f=1 is uniform
+ * Laplacian; smaller f → stronger pull toward the chord midpoint, producing
+ * the very round silhouette in https://watabou.github.io/city-generator/.
+ *
+ * Smoothing reads the old positions and writes new ones, so neighbour lookups
+ * within a single pass are based on the pre-smoothed shape (this matters —
+ * TownGen depends on it).
+ *
+ * Vertices are mutated in place; because adjacent outer cells share the same
+ * `Vertex` instances by ID, their outlines move with the boundary, just as in
+ * TownGen where boundary `Point`s are shared by reference between patches.
+ */
+export function smoothPatchBoundary<V, E, C>(
+  mesh: Mesh<V, E, C>,
+  innerCells: Set<CellId>,
+  iterations = 1,
+  factorOverride?: number,
+  pinned?: Set<VertexId>
+): void {
+  const loops = findBoundaryLoops(mesh, innerCells);
+  for (let it = 0; it < iterations; it++) {
+    for (const loop of loops) {
+      const N = loop.length;
+      if (N < 3) continue;
+      const f = factorOverride ?? Math.min(1, 40 / N);
+      const updates = new Map<VertexId, { x: number; y: number }>();
+      for (let i = 0; i < N; i++) {
+        const vid = loop[i]!;
+        if (pinned?.has(vid)) continue;
+        const pv = mesh.vertices.get(loop[(i - 1 + N) % N]!)!;
+        const cv = mesh.vertices.get(vid)!;
+        const nv = mesh.vertices.get(loop[(i + 1) % N]!)!;
+        updates.set(vid, {
+          x: (pv.x + cv.x * f + nv.x) / (2 + f),
+          y: (pv.y + cv.y * f + nv.y) / (2 + f),
+        });
+      }
+      for (const [vid, pos] of updates) {
+        const v = mesh.vertices.get(vid)!;
+        v.x = pos.x;
+        v.y = pos.y;
+      }
+    }
+  }
+}
+
 // ── Junction optimisation ────────────────────────────────────────────────────
 
 /**
