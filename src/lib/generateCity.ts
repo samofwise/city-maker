@@ -68,6 +68,12 @@ export const generateCity = (
   // Each pass runs weighted-average smoothing: new_v = (prev + f·v + next)/(2+f)
   const CITY_BOUNDARY_SMOOTHING = 4;
 
+  // Number of Laplacian smoothing passes applied to the coastline boundary.
+  // 0 = raw Voronoi edges (jagged coast), higher = smoother, more organic shoreline.
+  // Uses the same formula but a higher f (less aggressive than city) so the coast
+  // keeps a slightly more irregular, natural-looking edge rather than a perfect arc.
+  const COAST_BOUNDARY_SMOOTHING = 3;
+
   const rawSites = spiralSites(TOTAL_CELLS, cx, cy, maxR, rng);
 
   // Global Lloyd relax — evens out the spiral so cell areas are roughly
@@ -153,6 +159,38 @@ export const generateCity = (
       if (proj > cutoff) oceanIds.add(c.id);
     }
     oceanIds.delete(plazaId); // plaza always survives
+  }
+
+  // ── Step D: smooth the coastline ─────────────────────────────────────────
+  // Re-use the same Laplacian boundary-walk used for the city, but treat the
+  // ocean cells as the "inner" set so the loop traced is the coast edge.
+  //
+  // Key difference from the city pass:
+  //   • f = 1.0 (TownGen's default smoothVertex factor) rather than 0.6.
+  //     A higher f keeps more of the original vertex position, preserving the
+  //     slight irregularity that makes a coastline feel organic rather than
+  //     perfectly round like the city wall.
+  //   • Vertices shared with the already-smoothed city boundary are pinned so
+  //     the coast and city silhouette stay perfectly aligned at the junction
+  //     (no gap or overlap where the wall meets the waterfront).
+  if (oceanIds.size > 0 && COAST_BOUNDARY_SMOOTHING > 0) {
+    // Build the set of vertices that sit on the city boundary — we must not
+    // move these or the coast and city shapes will diverge at their meeting point.
+    const cityBoundaryVertices = new Set<import("./mesh").VertexId>();
+    for (const [eid] of mesh.edges) {
+      const adj = mesh.index.edgeCells.get(eid) ?? [];
+      let nCity = 0, nOuter = 0;
+      for (const c of adj) {
+        if (preSmoothInnerSet.has(c)) nCity++;
+        else nOuter++;
+      }
+      if (nCity === 1 && nOuter === 1) {
+        const e = mesh.edges.get(eid)!;
+        cityBoundaryVertices.add(e.a);
+        cityBoundaryVertices.add(e.b);
+      }
+    }
+    smoothPatchBoundary(mesh, oceanIds, COAST_BOUNDARY_SMOOTHING, 1.0, cityBoundaryVertices);
   }
 
   // Final city/mid sets with ocean cells removed.
