@@ -64,11 +64,48 @@ export const generateCity = (
 
   const rawSites = spiralSites(TOTAL_CELLS, cx, cy, maxR, rng);
 
-  // Relax the central CELL_COUNT sites — these are the ones we'll keep.
-  // Spiral order is already roughly distance-sorted from center.
+  // Pass 1: global Lloyd relax — evens out the spiral so cell areas are uniform
+  // and the Voronoi has well-formed neighbour structure throughout.
+  let sites = lloydRelax(rawSites, bounds, 7);
 
-  const innerIndices = Array.from({ length: TOTAL_CELLS }, (_, i) => i);
-  const sites = lloydRelax(rawSites, bounds, 7, innerIndices);
+  // Identify which site indices will become city cells (plaza + inner + mid
+  // rings) by distance from center on the relaxed positions. We pre-compute
+  // this BEFORE building the mesh so we can target a second Lloyd pass at
+  // just these sites, which evens out the city patches and pulls the city
+  // boundary toward a smooth, near-circular shape (TownGeneratorOS achieves
+  // similar smoothness by spiral-seeding + relaxation; a targeted pass tightens
+  // it further along the wall line, which is the part the user sees).
+  const innerCount = Math.floor(TOTAL_CELLS * 0.1);
+  const midCount = Math.floor(TOTAL_CELLS * 0.21);
+  const cityCellCount = 1 + innerCount + midCount;
+
+  const indicesByDist = Array.from({ length: TOTAL_CELLS }, (_, i) => i).sort(
+    (a, b) =>
+      dist(sites[a]!.x, sites[a]!.y, cx, cy) -
+      dist(sites[b]!.x, sites[b]!.y, cx, cy)
+  );
+  const cityIndices = indicesByDist.slice(0, cityCellCount);
+
+  // Pass 2: targeted Lloyd relax on city sites + immediate transition ring.
+  // Relaxing the ring just outside the city too removes the irregular outer
+  // neighbours that were forcing city boundary cells into spiky shapes — the
+  // ring acts like a smooth "cushion" the city packs against. Iterations are
+  // higher than the global pass because we want the city patch outline to
+  // converge to a near-circular shape (TownGeneratorOS achieves smooth city
+  // boundaries via spiral-seeding + heavy relaxation in `Model.hx:99-129`;
+  // applying a second focused pass tightens it further).
+  const cityPlusRingCount = Math.min(
+    TOTAL_CELLS,
+    Math.floor(cityCellCount * 1.6)
+  );
+  const cityPlusRingIndices = indicesByDist.slice(0, cityPlusRingCount);
+  sites = lloydRelax(sites, bounds, 6, cityPlusRingIndices);
+
+  // Pass 3: a final tight relax on just the city sites — now that they sit
+  // inside a regularised neighbourhood the centroids land closer to the
+  // geometric center of each cell, producing more equiangular city patches
+  // and a smoother wall ring.
+  sites = lloydRelax(sites, bounds, 12, cityIndices);
 
   const mesh = meshFromPoints<VertexData, EdgeData, CellData>(sites, bounds, {
     vertex: { ...DEFAULT_VERTEX_DATA },
@@ -95,9 +132,6 @@ export const generateCity = (
   const sorted = [...mesh.cells.values()].sort(
     (a, b) => (cellDist.get(a.id) ?? 0) - (cellDist.get(b.id) ?? 0)
   );
-
-  const innerCount = Math.floor(TOTAL_CELLS * 0.1);
-  const midCount = Math.floor(TOTAL_CELLS * 0.21);
 
   // Closest cell = plaza/market
   const plazaId = sorted[0]!.id;
